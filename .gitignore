@@ -1,0 +1,21 @@
+build/
+out/
+bin/
+obj/
+*.user
+*.vs/
+*.vcxproj.user
+*.sdf
+*.suo
+.cache/
+third_party/imgui/   # vendored, not tracked
+*.pdb
+*.obj
+*.exe
+*.sys
+*.ilk
+*.exp
+*.lib
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
