@@ -4,6 +4,16 @@ Chapter 7 · Hunter's Haven map · UE5 build pipeline. External + optional
 kernel stub. Written as a research kit for reverse-engineering practice on
 your own machines against a private offline build of the engine.
 
+## One-click install
+
+Download the repo, right-click `INSTALL.bat`, **Run as administrator**.
+It self-elevates, uses `winget` to install git / cmake / VS Build
+Tools / WDK, vendors imgui, patches the target hash, builds the user-
+mode EXE and both drivers, loads kernel services, and drops a desktop
+shortcut.
+
+To launch after that: desktop shortcut, or `RUN.bat` as admin.
+
 ## Scope
 
 - **Three collection modes**, selectable at runtime from the overlay:

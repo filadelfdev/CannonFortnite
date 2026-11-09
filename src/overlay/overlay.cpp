@@ -3,6 +3,8 @@
 #include "features/cannon_chest.h"
 #include "features/route.h"
 #include "features/speed.h"
+#include "features/loot.h"
+#include "features/aimbot.h"
 #include "core/memory.h"
 #include "antiban/heartbeat.h"
 #include "util/log.h"
@@ -50,7 +52,7 @@ std::atomic<bool>   g_quit{false};
 std::mutex              g_dlLock;
 std::vector<cf::feat::DrawItem> g_dl;
 
-enum class Tab { Route, Cannon, Speed, Esp, Security, About };
+enum class Tab { Route, Loot, Aim, Mats, Cannon, Speed, Esp, Security, About };
 Tab g_tab = Tab::Route;
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp){
@@ -238,6 +240,47 @@ void PageRoute(){
     RowToggle ("prefer rare",cf::feat::g_routeCfg.preferUnopenedTier);
 }
 
+void PageLoot(){
+    RowToggle ("enabled",       cf::feat::g_lootCfg.enabled);
+    RowToggle ("chest magnet",  cf::feat::g_lootCfg.chestMagnet);
+    RowToggle ("pickup magnet", cf::feat::g_lootCfg.pickupMagnet);
+    RowToggle ("ignore walls",  cf::feat::g_lootCfg.wallIgnore);
+    RowToggle ("instant pickup",cf::feat::g_lootCfg.instantPickup);
+    RowSliderF("radius",        cf::feat::g_lootCfg.magnetRadius_m, 10.f, 200.f, "%.0f m");
+    RowSliderF("pull speed",    cf::feat::g_lootCfg.magnetSpeed_cm, 100.f, 2000.f, "%.0f cm");
+    RowSliderI("pulls / tick",  cf::feat::g_lootCfg.maxPullsPerTick, 1, 16);
+    RowToggle ("prefer mythic", cf::feat::g_lootCfg.prioritiseMythic);
+}
+
+void PageAim(){
+    RowToggle ("enabled",      cf::feat::g_aimCfg.enabled);
+    RowToggle ("silent aim",   cf::feat::g_aimCfg.silent);
+    RowToggle ("visible only", cf::feat::g_aimCfg.visibleOnly);
+    RowToggle ("team check",   cf::feat::g_aimCfg.teamCheck);
+    RowToggle ("velocity lead",cf::feat::g_aimCfg.predictVelocity);
+    RowSliderF("fov",          cf::feat::g_aimCfg.fov_deg,       1.f, 60.f,  "%.1f deg");
+    RowSliderF("range",        cf::feat::g_aimCfg.maxRange_m,    20.f, 500.f, "%.0f m");
+    RowSliderF("smooth",       cf::feat::g_aimCfg.smooth,        1.f, 20.f,  "%.1f");
+    int bone = cf::feat::g_aimCfg.bone.load();
+    const char* bones[] = { "head", "neck", "chest", "pelvis" };
+    RowBegin("bone");
+    ImGui::SetNextItemWidth(-1);
+    if(ImGui::Combo("##bone", &bone, bones, 4)) cf::feat::g_aimCfg.bone.store(bone);
+    RowToggle ("no recoil",    cf::feat::g_aimCfg.noRecoil);
+    RowToggle ("no spread",    cf::feat::g_aimCfg.noSpread);
+    RowToggle ("auto fire",    cf::feat::g_aimCfg.autoFireOnLock);
+}
+
+void PageMats(){
+    RowToggle ("enabled",   cf::feat::g_matsCfg.enabled);
+    RowSliderI("stack",     cf::feat::g_matsCfg.targetStack, 100, 999);
+    RowToggle ("top up only",cf::feat::g_matsCfg.topUpOnly);
+    ImGui::Dummy(ImVec2(0,4));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("writes wood/brick/metal stacks to the target value every tick. 'top up only' never reduces a real count below the target.");
+    ImGui::PopStyleColor();
+}
+
 void PageCannon(){
     RowToggle ("enabled",       cf::feat::g_cfg.enabled);
     RowToggle ("tp into cannon",cf::feat::g_cfg.teleportIntoCannon);
@@ -362,7 +405,7 @@ void DrawFrame(){
     // ---- menu ----
     if(g_ovCfg.showMenu.load()){
         using namespace cf::ov::theme::col;
-        ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(560, 480), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowBgAlpha(0.96f);
         ImGui::Begin("##cf-root", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings |
@@ -392,6 +435,9 @@ void DrawFrame(){
         ImGui::BeginChild("##sidebar", ImVec2(140, 0), false);
           ImGui::Dummy(ImVec2(0, 4));
           TabButton("route",    Tab::Route);
+          TabButton("loot",     Tab::Loot);
+          TabButton("aim",      Tab::Aim);
+          TabButton("mats",     Tab::Mats);
           TabButton("cannon",   Tab::Cannon);
           TabButton("speed",    Tab::Speed);
           TabButton("esp",      Tab::Esp);
@@ -402,6 +448,9 @@ void DrawFrame(){
         ImGui::BeginChild("##content", ImVec2(0, 0), false);
           switch(g_tab){
               case Tab::Route:    PageRoute();    break;
+              case Tab::Loot:     PageLoot();     break;
+              case Tab::Aim:      PageAim();      break;
+              case Tab::Mats:     PageMats();     break;
               case Tab::Cannon:   PageCannon();   break;
               case Tab::Speed:    PageSpeed();    break;
               case Tab::Esp:      PageEsp();      break;

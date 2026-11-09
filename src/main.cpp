@@ -18,6 +18,8 @@
 #include "features/route.h"
 #include "features/speed.h"
 #include "features/esp.h"
+#include "features/loot.h"
+#include "features/aimbot.h"
 #include "overlay/overlay.h"
 #include "antiban/antiban.h"
 #include "antiban/hash.h"
@@ -97,9 +99,10 @@ void PerFrame(float dt, float sw, float sh){
     int t = g_tick.fetch_add(1);
 
     cf::feat::TickSpeed(lp, t);
+    cf::feat::TickLoot (lp, snap, dt);
+    cf::feat::TickMats (lp);
+    cf::feat::TickAim  (lp, snap, dt);
 
-    // Route mode: if TeleportChain / Bulk, the route planner drives the
-    // player; the cannon pipeline is skipped. Overlay HUD gets both.
     auto mode = cf::feat::g_routeCfg.mode.load();
     if(mode == cf::feat::RouteMode::CannonArc){
         cf::feat::Tick(lp, snap, dt);

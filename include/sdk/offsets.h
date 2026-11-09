@@ -71,6 +71,50 @@ namespace cf::off {
     constexpr uint32_t Cannon_bCanFire           = 0x1150;
     constexpr uint32_t Cannon_LastFiredTime      = 0x1158;
 
+    // --- AFortPickup (floor loot) ---
+    constexpr uint32_t Pickup_PickupTarget       = 0x870;   // target pawn
+    constexpr uint32_t Pickup_PrimaryPickupItemEntry = 0x820;
+    constexpr uint32_t Pickup_ItemDefinition     = 0x820 + 0x18;
+    constexpr uint32_t Pickup_Count              = 0x820 + 0x28;
+    constexpr uint32_t Pickup_bServerStoppedSimulating = 0x8A0;
+    constexpr uint32_t Pickup_PickupNetData_Count= 0x898;
+
+    // --- AFortPlayerPawnAthena / AFortPlayerControllerAthena ---
+    constexpr uint32_t Pawn_WeaponList           = 0xA18;   // TArray<AFortWeapon*>
+    constexpr uint32_t Pawn_CurrentWeapon        = 0xA40;
+    constexpr uint32_t Pawn_InventoryComponent   = 0x920;
+    constexpr uint32_t Pawn_bIsDying             = 0x6F0;
+    constexpr uint32_t Pawn_TeamIndex            = 0xB20;
+
+    // --- FortInventory ---
+    constexpr uint32_t Inv_ReplicatedEntries     = 0x90;    // TArray<FFortItemEntry>
+    constexpr uint32_t Inv_LocalInventoryItems   = 0xA0;
+
+    // --- FFortItemEntry ---
+    constexpr uint32_t ItemEntry_ItemDefinition  = 0x18;
+    constexpr uint32_t ItemEntry_Count           = 0x20;
+    constexpr uint32_t ItemEntry_LoadedAmmo      = 0x28;
+    constexpr uint32_t ItemEntry_Guid            = 0x30;
+
+    // --- AFortWeapon ---
+    constexpr uint32_t Weapon_WeaponData         = 0x538;
+    constexpr uint32_t Weapon_AmmoCount          = 0xA40;
+    constexpr uint32_t Weapon_bHasInfiniteAmmo   = 0xA50;
+    constexpr uint32_t Weapon_LastFireTime       = 0x7B8;
+    constexpr uint32_t Weapon_FireCooldown       = 0x7C0;
+
+    // --- material item defs (BP paths — resolved by fname hash) ---
+    // Wood=BuildingItemData_Wood, Brick=Stone, Metal=Metal.
+    constexpr uint32_t Material_Wood_ItemDef_FnameHash  = 0xA1B3D522;
+    constexpr uint32_t Material_Brick_ItemDef_FnameHash = 0x3C5F8A14;
+    constexpr uint32_t Material_Metal_ItemDef_FnameHash = 0x7E29C44B;
+
+    // --- bone indices on FortPlayerPawn mesh ---
+    constexpr int Bone_Head   = 66;
+    constexpr int Bone_Neck   = 65;
+    constexpr int Bone_Chest  = 7;
+    constexpr int Bone_Pelvis = 1;
+
     // --- UObject (base) ---
     constexpr uint32_t UObject_ClassPrivate = 0x10;
     constexpr uint32_t UObject_NamePrivate  = 0x18;
