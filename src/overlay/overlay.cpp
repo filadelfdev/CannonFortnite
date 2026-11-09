@@ -1,4 +1,5 @@
 #include "overlay/overlay.h"
+#include "overlay/theme.h"
 #include "features/cannon_chest.h"
 #include "features/route.h"
 #include "features/speed.h"
@@ -12,6 +13,7 @@
 #include <mutex>
 #include <vector>
 #include <chrono>
+#include <cstdio>
 
 #if __has_include(<imgui.h>)
 #  include <imgui.h>
@@ -25,6 +27,7 @@
 #pragma comment(lib, "d3d11")
 #pragma comment(lib, "dxgi")
 #pragma comment(lib, "d3dcompiler")
+#pragma comment(lib, "dwmapi")
 
 #if CF_HAS_IMGUI
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -46,6 +49,9 @@ std::atomic<bool>   g_quit{false};
 
 std::mutex              g_dlLock;
 std::vector<cf::feat::DrawItem> g_dl;
+
+enum class Tab { Route, Cannon, Speed, Esp, Security, About };
+Tab g_tab = Tab::Route;
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp){
 #if CF_HAS_IMGUI
@@ -115,6 +121,226 @@ bool CreateWindow_(){
     return true;
 }
 
+#if CF_HAS_IMGUI
+// ---- small widgets ---------------------------------------------------
+
+ImU32 X(unsigned argb){ return (ImU32)argb; }
+
+// A pill with a dot + text. Three variants: ok / warn / off.
+void StatusPill(const char* label, bool ok){
+    using namespace cf::ov::theme::col;
+    ImU32 dot = ok ? X(::cf::ov::theme::col::ok) : X(textDim);
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float  h = ImGui::GetFrameHeight();
+    float  w = ImGui::CalcTextSize(label).x + h*1.4f + 10.f;
+    auto*  dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x+w, p.y+h), X(surf), 999.f);
+    dl->AddCircleFilled(ImVec2(p.x+h*0.55f, p.y+h*0.5f), 3.5f, dot, 12);
+    dl->AddText(ImVec2(p.x+h*1.0f, p.y+(h-ImGui::GetTextLineHeight())*0.5f),
+                X(text), label);
+    ImGui::Dummy(ImVec2(w, h));
+}
+
+// Toggle switch — slimmer than a checkbox, cyan when on.
+bool Toggle(const char* id, bool* v){
+    using namespace cf::ov::theme::col;
+    ImVec2 p  = ImGui::GetCursorScreenPos();
+    float  h  = ImGui::GetFrameHeight() * 0.82f;
+    float  w  = h * 1.9f;
+    bool clicked = ImGui::InvisibleButton(id, ImVec2(w, h));
+    if(clicked) *v = !*v;
+    auto* dl = ImGui::GetWindowDrawList();
+    ImU32 track = *v ? X(accent) : X(surfHi);
+    ImU32 knob  = *v ? X(text)   : X(textDim);
+    dl->AddRectFilled(p, ImVec2(p.x+w, p.y+h), track, h*0.5f);
+    float cx = *v ? (p.x + w - h*0.5f) : (p.x + h*0.5f);
+    dl->AddCircleFilled(ImVec2(cx, p.y+h*0.5f), h*0.38f, knob, 16);
+    return clicked;
+}
+
+// A labelled row: label on the left, control on the right.
+void RowBegin(const char* label){
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    ImGui::SameLine(160);
+}
+
+bool RowToggle(const char* label, std::atomic<bool>& v){
+    RowBegin(label);
+    bool b = v.load();
+    bool changed = Toggle(label, &b);
+    if(changed) v.store(b);
+    return changed;
+}
+
+bool RowSliderF(const char* label, std::atomic<float>& v, float lo, float hi, const char* fmt = "%.1f"){
+    RowBegin(label);
+    float f = v.load();
+    ImGui::SetNextItemWidth(-1);
+    char id[64]; std::snprintf(id, 64, "##%s", label);
+    bool changed = ImGui::SliderFloat(id, &f, lo, hi, fmt);
+    if(changed) v.store(f);
+    return changed;
+}
+bool RowSliderI(const char* label, std::atomic<int>& v, int lo, int hi){
+    RowBegin(label);
+    int i = v.load();
+    ImGui::SetNextItemWidth(-1);
+    char id[64]; std::snprintf(id, 64, "##%s", label);
+    bool changed = ImGui::SliderInt(id, &i, lo, hi);
+    if(changed) v.store(i);
+    return changed;
+}
+
+// Sidebar tab button.
+bool TabButton(const char* label, Tab self){
+    using namespace cf::ov::theme::col;
+    bool active = (g_tab == self);
+    ImGui::PushStyleColor(ImGuiCol_Button,        active ? X(surf)   : ImVec4(0,0,0,0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, X(surfHi));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  X(surfHi));
+    ImGui::PushStyleColor(ImGuiCol_Text, active ? X(text) : X(textDim));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,  ImVec2(10, 9));
+    bool clicked = ImGui::Button(label, ImVec2(-1, 0));
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(4);
+    if(clicked) g_tab = self;
+    // Accent bar on the left when active.
+    if(active){
+        ImVec2 p = ImGui::GetItemRectMin();
+        ImVec2 q = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            ImVec2(p.x - 6, p.y + 6), ImVec2(p.x - 3, q.y - 6),
+            X(accent), 2.f);
+    }
+    return clicked;
+}
+
+// ---- pages -----------------------------------------------------------
+
+void PageRoute(){
+    int mode = (int)cf::feat::g_routeCfg.mode.load();
+    const char* modes[] = { "cannon arc", "teleport chain", "bulk sweep" };
+    RowBegin("mode");
+    ImGui::SetNextItemWidth(-1);
+    if(ImGui::Combo("##mode", &mode, modes, 3))
+        cf::feat::g_routeCfg.mode.store((cf::feat::RouteMode)mode);
+
+    RowSliderF("hop size",   cf::feat::g_routeCfg.hopDelta_cm,   500.f, 3500.f, "%.0f cm");
+    RowSliderF("cadence",    cf::feat::g_routeCfg.hopCadence_ms, 10.f,  300.f,  "%.0f ms");
+    RowSliderF("range",      cf::feat::g_routeCfg.chainRange_m,  200.f, 4000.f, "%.0f m");
+    RowToggle ("bulk open",  cf::feat::g_routeCfg.bulkOpenOnArrive);
+    RowSliderF("bulk radius",cf::feat::g_routeCfg.bulkRadius_cm, 200.f, 2500.f, "%.0f cm");
+    RowSliderI("opens / tick",cf::feat::g_routeCfg.maxOpensPerTick, 1, 12);
+    RowToggle ("face target",cf::feat::g_routeCfg.rotateToTarget);
+    RowToggle ("prefer rare",cf::feat::g_routeCfg.preferUnopenedTier);
+}
+
+void PageCannon(){
+    RowToggle ("enabled",       cf::feat::g_cfg.enabled);
+    RowToggle ("tp into cannon",cf::feat::g_cfg.teleportIntoCannon);
+    RowToggle ("auto fire",     cf::feat::g_cfg.autoFire);
+    RowToggle ("open on touch", cf::feat::g_cfg.openOnTouch);
+    RowToggle ("skip looted",   cf::feat::g_cfg.skipLootedChests);
+    RowSliderF("range",         cf::feat::g_cfg.maxRange_m,          100.f, 2500.f, "%.0f m");
+    RowSliderF("muzzle",        cf::feat::g_cfg.cannonMuzzleSpeed,   1500.f,9000.f, "%.0f");
+    RowSliderF("cooldown",      cf::feat::g_cfg.cooldownSec,         0.1f,  3.f,    "%.2f s");
+    RowSliderI("chests / burst",cf::feat::g_cfg.chestsPerBurst,      1, 10);
+}
+
+void PageSpeed(){
+    RowToggle ("enabled",   cf::feat::g_speedCfg.enabled);
+    RowSliderF("walk",      cf::feat::g_speedCfg.walkSpeed,     600.f,  9000.f, "%.0f");
+    RowSliderF("fly",       cf::feat::g_speedCfg.flySpeed,      1000.f,12000.f, "%.0f");
+    RowSliderF("accel",     cf::feat::g_speedCfg.acceleration,  2000.f,40000.f, "%.0f");
+    RowSliderF("air ctrl",  cf::feat::g_speedCfg.airControl,    0.1f,  1.f,    "%.2f");
+    RowSliderF("gravity",   cf::feat::g_speedCfg.gravityScale,  0.05f, 1.5f,   "%.2f");
+    RowSliderF("jump z",    cf::feat::g_speedCfg.jumpZ,         400.f, 2500.f, "%.0f");
+}
+
+void PageEsp(){
+    RowToggle ("enabled",  cf::feat::g_espCfg.enabled);
+    RowToggle ("chests",   cf::feat::g_espCfg.drawChests);
+    RowToggle ("cannons",  cf::feat::g_espCfg.drawCannons);
+    RowToggle ("players",  cf::feat::g_espCfg.drawPlayers);
+    RowToggle ("tracers",  cf::feat::g_espCfg.drawLines);
+    RowSliderF("range",    cf::feat::g_espCfg.maxDraw_m,       50.f, 2000.f, "%.0f m");
+}
+
+void PageSecurity(){
+    using namespace cf::ov::theme::col;
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("kernel path and ac heartbeat run on their own workers. toggles here only soften; the panic key (END) still hard-exits.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 4));
+
+    StatusPill(cf::mem::KernelActive()  ? "kernel read ON" : "kernel read OFF", cf::mem::KernelActive());
+    ImGui::SameLine();
+    StatusPill(cf::ab::HeartbeatArmed() ? "heartbeat ON"   : "heartbeat OFF",   cf::ab::HeartbeatArmed());
+    ImGui::Dummy(ImVec2(0, 6));
+
+    char buf[64];
+    std::snprintf(buf, 64, "chests opened this session: %u", cf::feat::Looted());
+    ImGui::TextUnformatted(buf);
+
+    if(ImGui::Button("reset counter")) cf::feat::ResetLooted();
+    ImGui::SameLine();
+    if(ImGui::Button("panic exit"))    g_quit = true;
+}
+
+void PageAbout(){
+    using namespace cf::ov::theme::col;
+    ImGui::PushStyleColor(ImGuiCol_Text, X(text));
+    ImGui::TextUnformatted("cannon chest ripper");
+    ImGui::PopStyleColor();
+    ImGui::PushStyleColor(ImGuiCol_Text, X(textDim));
+    ImGui::TextUnformatted("v2 — kernel path · teleport chain · ac heartbeat");
+    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::TextUnformatted("hotkeys");
+    ImGui::PopStyleColor();
+    ImGui::BulletText("INSERT   toggle menu");
+    ImGui::BulletText("F9       speed");
+    ImGui::BulletText("F10      cannon");
+    ImGui::BulletText("F11      esp");
+    ImGui::BulletText("END      panic exit");
+    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::PushStyleColor(ImGuiCol_Text, X(textDim));
+    ImGui::TextUnformatted("built by olivia");
+    ImGui::TextUnformatted("discord.gg/ojailbreaks");
+    ImGui::PopStyleColor();
+}
+
+// ---- esp marks -------------------------------------------------------
+
+// A single-pass mark: two L brackets + dot + distance chip. Reads as one
+// system with the panel's accent colour, costs less than a filled box.
+void DrawEspMark(ImDrawList* dl, const cf::feat::DrawItem& it, float screenW){
+    using namespace cf::ov::theme::col;
+    ImU32 c  = (ImU32)it.color;
+    ImU32 ct = (c & 0x60FFFFFF);
+    float x = it.x, y = it.y;
+    float a = 8.f, b = 2.f;
+    // corner brackets
+    dl->AddLine(ImVec2(x-a, y-a), ImVec2(x-a+b*2, y-a), c, 1.4f);
+    dl->AddLine(ImVec2(x-a, y-a), ImVec2(x-a, y-a+b*2), c, 1.4f);
+    dl->AddLine(ImVec2(x+a, y-a), ImVec2(x+a-b*2, y-a), c, 1.4f);
+    dl->AddLine(ImVec2(x+a, y-a), ImVec2(x+a, y-a+b*2), c, 1.4f);
+    dl->AddLine(ImVec2(x-a, y+a), ImVec2(x-a+b*2, y+a), c, 1.4f);
+    dl->AddLine(ImVec2(x-a, y+a), ImVec2(x-a, y+a-b*2), c, 1.4f);
+    dl->AddLine(ImVec2(x+a, y+a), ImVec2(x+a-b*2, y+a), c, 1.4f);
+    dl->AddLine(ImVec2(x+a, y+a), ImVec2(x+a, y+a-b*2), c, 1.4f);
+    dl->AddCircleFilled(ImVec2(x, y), 1.8f, c, 8);
+    dl->AddText(ImVec2(x+a+4, y-7), c, it.label);
+    if(it.drawLineFromBottom){
+        dl->AddLine(ImVec2(screenW*0.5f, (float)g_h),
+                    ImVec2(x, y+a), ct, 1.f);
+    }
+}
+
+#endif
+
 void DrawFrame(){
     float clear[4]{0,0,0,0};
     g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
@@ -125,111 +351,65 @@ void DrawFrame(){
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    // ESP pass — background draw list so nothing eats input.
-    auto* dl = ImGui::GetBackgroundDrawList();
-    std::vector<cf::feat::DrawItem> items;
-    { std::scoped_lock _(g_dlLock); items = g_dl; }
-    for(auto& it : items){
-        dl->AddRect(ImVec2(it.x-10, it.y-14), ImVec2(it.x+10, it.y+14),
-                    (ImU32)it.color, 2.f, 0, 1.4f);
-        dl->AddText(ImVec2(it.x+12, it.y-7), (ImU32)it.color, it.label);
-        if(it.drawLineFromBottom){
-            dl->AddLine(ImVec2((float)g_w*0.5f, (float)g_h),
-                        ImVec2(it.x, it.y+14),
-                        ((ImU32)it.color & 0x80FFFFFF), 1.f);
-        }
+    // ---- ESP (background draw list, no input cost) ----
+    {
+        auto* bgdl = ImGui::GetBackgroundDrawList();
+        std::vector<cf::feat::DrawItem> items;
+        { std::scoped_lock _(g_dlLock); items = g_dl; }
+        for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
+    // ---- menu ----
     if(g_ovCfg.showMenu.load()){
-        ImGui::SetNextWindowSize(ImVec2(400, 560), ImGuiCond_FirstUseEver);
-        ImGui::Begin("CF :: cannon-chest ripper v2", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        using namespace cf::ov::theme::col;
+        ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowBgAlpha(0.96f);
+        ImGui::Begin("##cf-root", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoCollapse);
 
-        // status bar: kernel / heartbeat / opened
-        ImGui::Text("kernel: %s   heartbeat: %s   opened: %u",
-                    cf::mem::KernelActive()    ? "ON" : "off",
-                    cf::ab::HeartbeatArmed()   ? "ON" : "off",
-                    cf::feat::Looted());
-        ImGui::Separator();
+        // Title strip
+        ImVec2 wp = ImGui::GetWindowPos();
+        ImVec2 ws = ImGui::GetWindowSize();
+        auto* wdl = ImGui::GetWindowDrawList();
+        wdl->AddRectFilled(ImVec2(wp.x, wp.y),
+                           ImVec2(wp.x + ws.x, wp.y + 42),
+                           X(bg2), 10.f, ImDrawFlags_RoundCornersTop);
+        wdl->AddRectFilled(ImVec2(wp.x + 16, wp.y + 20),
+                           ImVec2(wp.x + 22, wp.y + 32),
+                           X(accent), 2.f);
+        wdl->AddText(ImVec2(wp.x + 32, wp.y + 14), X(text), "cannon ripper");
+        wdl->AddText(ImVec2(wp.x + 130, wp.y + 16), X(textDim), "v2");
 
-        if(ImGui::CollapsingHeader("route", ImGuiTreeNodeFlags_DefaultOpen)){
-            int mode = (int)cf::feat::g_routeCfg.mode.load();
-            const char* modes[] = { "cannon arc (slow)", "teleport chain (fast)", "bulk sweep" };
-            if(ImGui::Combo("mode", &mode, modes, 3))
-                cf::feat::g_routeCfg.mode.store((cf::feat::RouteMode)mode);
-            float hop = cf::feat::g_routeCfg.hopDelta_cm.load();
-            float cad = cf::feat::g_routeCfg.hopCadence_ms.load();
-            float rng = cf::feat::g_routeCfg.chainRange_m.load();
-            bool  bo  = cf::feat::g_routeCfg.bulkOpenOnArrive.load();
-            float br  = cf::feat::g_routeCfg.bulkRadius_cm.load();
-            int   mop = cf::feat::g_routeCfg.maxOpensPerTick.load();
-            bool  rot = cf::feat::g_routeCfg.rotateToTarget.load();
-            bool  tier= cf::feat::g_routeCfg.preferUnopenedTier.load();
-            if(ImGui::SliderFloat("hop size (cm)",   &hop, 500.f, 3500.f))  cf::feat::g_routeCfg.hopDelta_cm.store(hop);
-            if(ImGui::SliderFloat("hop cadence (ms)",&cad, 10.f, 300.f))    cf::feat::g_routeCfg.hopCadence_ms.store(cad);
-            if(ImGui::SliderFloat("chain range (m)", &rng, 200.f, 4000.f))  cf::feat::g_routeCfg.chainRange_m.store(rng);
-            if(ImGui::Checkbox("bulk open on arrive",&bo))  cf::feat::g_routeCfg.bulkOpenOnArrive.store(bo);
-            if(ImGui::SliderFloat("bulk radius (cm)",&br, 200.f, 2500.f))   cf::feat::g_routeCfg.bulkRadius_cm.store(br);
-            if(ImGui::SliderInt  ("max opens / tick",&mop, 1, 12))          cf::feat::g_routeCfg.maxOpensPerTick.store(mop);
-            if(ImGui::Checkbox("face target",        &rot)) cf::feat::g_routeCfg.rotateToTarget.store(rot);
-            if(ImGui::Checkbox("prefer rare tier",   &tier))cf::feat::g_routeCfg.preferUnopenedTier.store(tier);
-            if(ImGui::Button("reset counter")) cf::feat::ResetLooted();
-        }
+        // Right-side status mini: counter + kernel dot
+        char cnt[32]; std::snprintf(cnt, 32, "%u opened", cf::feat::Looted());
+        ImVec2 sz = ImGui::CalcTextSize(cnt);
+        wdl->AddText(ImVec2(wp.x + ws.x - sz.x - 20, wp.y + 16), X(textDim), cnt);
 
-        if(ImGui::CollapsingHeader("cannon → chest")){
-            bool  e   = cf::feat::g_cfg.enabled.load();
-            bool  tp  = cf::feat::g_cfg.teleportIntoCannon.load();
-            bool  af  = cf::feat::g_cfg.autoFire.load();
-            bool  skl = cf::feat::g_cfg.skipLootedChests.load();
-            bool  oot = cf::feat::g_cfg.openOnTouch.load();
-            float rng = cf::feat::g_cfg.maxRange_m.load();
-            float ms  = cf::feat::g_cfg.cannonMuzzleSpeed.load();
-            float cd  = cf::feat::g_cfg.cooldownSec.load();
-            int   bpb = cf::feat::g_cfg.chestsPerBurst.load();
-            if(ImGui::Checkbox("enabled",             &e))   cf::feat::g_cfg.enabled.store(e);
-            if(ImGui::Checkbox("teleport into cannon",&tp))  cf::feat::g_cfg.teleportIntoCannon.store(tp);
-            if(ImGui::Checkbox("auto-fire",           &af))  cf::feat::g_cfg.autoFire.store(af);
-            if(ImGui::Checkbox("open on touch",       &oot)) cf::feat::g_cfg.openOnTouch.store(oot);
-            if(ImGui::Checkbox("skip looted",         &skl)) cf::feat::g_cfg.skipLootedChests.store(skl);
-            if(ImGui::SliderFloat("range (m)",        &rng, 100.f, 2500.f))  cf::feat::g_cfg.maxRange_m.store(rng);
-            if(ImGui::SliderFloat("muzzle speed",     &ms,  1500.f, 9000.f)) cf::feat::g_cfg.cannonMuzzleSpeed.store(ms);
-            if(ImGui::SliderFloat("cooldown (s)",     &cd,  0.1f, 3.f))      cf::feat::g_cfg.cooldownSec.store(cd);
-            if(ImGui::SliderInt  ("chests per burst", &bpb, 1, 10))          cf::feat::g_cfg.chestsPerBurst.store(bpb);
-        }
+        ImGui::Dummy(ImVec2(0, 32));
 
-        if(ImGui::CollapsingHeader("speed")){
-            bool  e   = cf::feat::g_speedCfg.enabled.load();
-            float ws  = cf::feat::g_speedCfg.walkSpeed.load();
-            float fs  = cf::feat::g_speedCfg.flySpeed.load();
-            float ac  = cf::feat::g_speedCfg.acceleration.load();
-            float air = cf::feat::g_speedCfg.airControl.load();
-            float grv = cf::feat::g_speedCfg.gravityScale.load();
-            float jmp = cf::feat::g_speedCfg.jumpZ.load();
-            if(ImGui::Checkbox("speed enabled",  &e))   cf::feat::g_speedCfg.enabled.store(e);
-            if(ImGui::SliderFloat("walk",        &ws,  600.f, 9000.f))  cf::feat::g_speedCfg.walkSpeed.store(ws);
-            if(ImGui::SliderFloat("fly",         &fs,  1000.f,12000.f)) cf::feat::g_speedCfg.flySpeed.store(fs);
-            if(ImGui::SliderFloat("accel",       &ac,  2000.f,40000.f)) cf::feat::g_speedCfg.acceleration.store(ac);
-            if(ImGui::SliderFloat("air control", &air, 0.1f, 1.f))      cf::feat::g_speedCfg.airControl.store(air);
-            if(ImGui::SliderFloat("gravity",     &grv, 0.05f,1.5f))     cf::feat::g_speedCfg.gravityScale.store(grv);
-            if(ImGui::SliderFloat("jump z",      &jmp, 400.f, 2500.f))  cf::feat::g_speedCfg.jumpZ.store(jmp);
-        }
+        // Sidebar + content split
+        ImGui::BeginChild("##sidebar", ImVec2(140, 0), false);
+          ImGui::Dummy(ImVec2(0, 4));
+          TabButton("route",    Tab::Route);
+          TabButton("cannon",   Tab::Cannon);
+          TabButton("speed",    Tab::Speed);
+          TabButton("esp",      Tab::Esp);
+          TabButton("security", Tab::Security);
+          TabButton("about",    Tab::About);
+        ImGui::EndChild();
+        ImGui::SameLine();
+        ImGui::BeginChild("##content", ImVec2(0, 0), false);
+          switch(g_tab){
+              case Tab::Route:    PageRoute();    break;
+              case Tab::Cannon:   PageCannon();   break;
+              case Tab::Speed:    PageSpeed();    break;
+              case Tab::Esp:      PageEsp();      break;
+              case Tab::Security: PageSecurity(); break;
+              case Tab::About:    PageAbout();    break;
+          }
+        ImGui::EndChild();
 
-        if(ImGui::CollapsingHeader("esp")){
-            bool e   = cf::feat::g_espCfg.enabled.load();
-            bool c   = cf::feat::g_espCfg.drawChests.load();
-            bool ca  = cf::feat::g_espCfg.drawCannons.load();
-            bool pl  = cf::feat::g_espCfg.drawPlayers.load();
-            bool ln  = cf::feat::g_espCfg.drawLines.load();
-            float r  = cf::feat::g_espCfg.maxDraw_m.load();
-            if(ImGui::Checkbox("esp enabled",    &e))  cf::feat::g_espCfg.enabled.store(e);
-            if(ImGui::Checkbox("chests",         &c))  cf::feat::g_espCfg.drawChests.store(c);
-            if(ImGui::Checkbox("cannons",        &ca)) cf::feat::g_espCfg.drawCannons.store(ca);
-            if(ImGui::Checkbox("players",        &pl)) cf::feat::g_espCfg.drawPlayers.store(pl);
-            if(ImGui::Checkbox("tracers",        &ln)) cf::feat::g_espCfg.drawLines.store(ln);
-            if(ImGui::SliderFloat("range (m)",   &r, 50.f, 2000.f)) cf::feat::g_espCfg.maxDraw_m.store(r);
-        }
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("INSERT menu  ·  F9 speed  ·  F10 cannon  ·  F11 esp  ·  END panic");
         ImGui::End();
     }
 
@@ -260,7 +440,7 @@ int Run(TickFn perFrame){
 #if CF_HAS_IMGUI
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::StyleColorsDark();
+    cf::ov::theme::Apply();
     ImGui_ImplWin32_Init(g_hwnd);
     ImGui_ImplDX11_Init(g_dev, g_ctx);
 #endif
