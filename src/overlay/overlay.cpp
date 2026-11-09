@@ -292,14 +292,22 @@ void PageCannon(){
     RowToggle ("teleport cannon", cf::feat::g_cfg.teleportCannon);
     RowToggle ("player rides",    cf::feat::g_cfg.playerRidesCannon);
     RowToggle ("auto fire",       cf::feat::g_cfg.autoFire);
+    RowToggle ("skip align check",cf::feat::g_cfg.skipAlignmentCheck);
+    RowToggle ("fire on approach",cf::feat::g_cfg.fireOnApproach);
     RowToggle ("flag on smash",   cf::feat::g_cfg.openOnTouch);
     RowToggle ("skip looted",     cf::feat::g_cfg.skipLootedChests);
-    RowSliderF("range",           cf::feat::g_cfg.maxRange_m,       100.f, 3000.f, "%.0f m");
-    RowSliderF("hover height",    cf::feat::g_cfg.hoverHeight_cm,   200.f, 1200.f, "%.0f cm");
-    RowSliderF("muzzle (smash)",  cf::feat::g_cfg.smashMuzzleSpeed, 500.f, 6000.f, "%.0f");
-    RowSliderF("aim pitch",       cf::feat::g_cfg.aimPitchDeg,      -90.f, -45.f,  "%.1f deg");
-    RowSliderF("cooldown",        cf::feat::g_cfg.cooldownSec,      0.05f, 2.f,    "%.2f s");
-    RowSliderI("session limit",   cf::feat::g_cfg.chestsPerSession, 0, 200);
+    RowSliderF("range",           cf::feat::g_cfg.maxRange_m,         100.f, 4000.f, "%.0f m");
+    RowSliderF("hover height",    cf::feat::g_cfg.hoverHeight_cm,     150.f, 1200.f, "%.0f cm");
+    RowSliderF("muzzle (smash)",  cf::feat::g_cfg.smashMuzzleSpeed,   500.f, 6000.f, "%.0f");
+    RowSliderF("aim pitch",       cf::feat::g_cfg.aimPitchDeg,        -90.f, -45.f,  "%.1f deg");
+    RowSliderF("cooldown",        cf::feat::g_cfg.cooldownSec,        0.03f, 1.f,    "%.3f s");
+    RowSliderF("fire range",      cf::feat::g_cfg.fireRange_cm,       100.f, 900.f,  "%.0f cm");
+    RowSliderF("cannon warp cap", cf::feat::g_cfg.cannonTeleportCap_cm, 3000.f, 120000.f, "%.0f cm");
+    RowSliderI("lookahead",       cf::feat::g_cfg.lookahead,          1, 20);
+    RowSliderI("fires / tick",    cf::feat::g_cfg.maxFiresPerTick,    1, 8);
+    RowSliderI("session limit",   cf::feat::g_cfg.chestsPerSession,   0, 2000);
+    ImGui::Dummy(ImVec2(0,4));
+    if(ImGui::Button("reset counter")) cf::feat::ResetSmashCounter();
 }
 
 void PageSpeed(){
@@ -433,10 +441,21 @@ void DrawFrame(){
         wdl->AddText(ImVec2(wp.x + 32, wp.y + 14), X(text), "cannon ripper");
         wdl->AddText(ImVec2(wp.x + 130, wp.y + 16), X(textDim), "v2");
 
-        // Right-side status mini: counter + kernel dot
-        char cnt[32]; std::snprintf(cnt, 32, "%u opened", cf::feat::Looted());
+        // Right-side status mini: smashed count + rate + tokens
+        static double   t0 = 0.0;
+        static uint32_t last = 0;
+        static float    rate = 0.f;
+        double now = ImGui::GetTime();
+        uint32_t s = cf::feat::SmashedThisSession();
+        if(t0 == 0.0){ t0 = now; last = s; }
+        if((now - t0) >= 1.0){
+            rate = (float)(s - last) / (float)(now - t0);
+            t0 = now; last = s;
+        }
+        char cnt[96];
+        std::snprintf(cnt, 96, "%u smashed · %.1f/s · %.1fM xp", s, rate, s * 0.137f);
         ImVec2 sz = ImGui::CalcTextSize(cnt);
-        wdl->AddText(ImVec2(wp.x + ws.x - sz.x - 20, wp.y + 16), X(textDim), cnt);
+        wdl->AddText(ImVec2(wp.x + ws.x - sz.x - 20, wp.y + 16), X(accent), cnt);
 
         ImGui::Dummy(ImVec2(0, 32));
 

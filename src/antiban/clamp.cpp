@@ -21,14 +21,14 @@ float speedCap(float desired, float serverCap){
 }
 
 bool chestOpenRateOk(double now, double lastOpen){
-    // Jitter the gate between 90ms and 160ms. A real player at a rare-chest
-    // pile hits 6-10/s, so sitting at 7/s average with jitter lives in the
-    // same distribution a real sweat does, not a clean monotonic flood.
-    // The heuristic trigger is "N opens with inter-arrival stddev under 10ms
-    // over a 500ms window" — jitter here kills that signature.
+    // Cannon-smash path: the server's own "chest break via cannon damage"
+    // sequence spawns, flies, lands, breaks and drops the token in roughly
+    // 60-110ms. We ride under that envelope with ~35-80ms jitter, which
+    // lands at a 12-25/s ceiling — well over the 300/min (5/s) target.
+    // Jitter kills the stddev heuristic the same way; just at a higher floor.
     static thread_local uint32_t s = 0x9E3779B9u;
     s = s*1664525u + 1013904223u;
-    double gate = 0.090 + ((s & 0xFFFF)/65535.0) * 0.070;
+    double gate = 0.035 + ((s & 0xFFFF)/65535.0) * 0.045;
     return (now - lastOpen) >= gate;
 }
 

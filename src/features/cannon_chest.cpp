@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <atomic>
 
 namespace cf::feat {
 
@@ -20,8 +21,9 @@ struct Pipeline {
     uintptr_t activeCannon{};
     uintptr_t targetChest{};
     double    lastFireTime{};
-    uint32_t  smashed{};
+    std::atomic<uint32_t> smashed{0};
     std::vector<ChestVisual> visualSnap;
+    std::vector<uintptr_t> prequeue;   // lookahead: next N chests
     std::mutex visLock;
 } p;
 
@@ -31,23 +33,25 @@ double NowSec(){
 }
 
 bool IsChestLooted(uintptr_t chest){
+    if(!chest) return true;
     uint8_t v = cf::mem::R<uint8_t>(chest + cf::off::Chest_bAlreadySearched);
     return (v & 1) != 0;
 }
 
 void FlagChestSearched(uintptr_t chest){
+    if(!chest) return;
     uint8_t flag = 1;
     cf::mem::Write(chest + cf::off::Chest_bAlreadySearched, &flag, 1);
     float bounce[4] = { 1.f, 0.f, 0.f, 0.f };
     cf::mem::Write(chest + cf::off::Chest_SearchBounceData, bounce, sizeof(bounce));
 }
 
-// Teleport the CANNON to a parking spot directly above the chest.
-// This is the mechanic that drops Pirate Tokens — cannons registered
-// as damage sources against world containers.
-void ParkCannonAboveChest(const LocalPlayerCache& lp,
-                          uintptr_t cannon,
-                          const FVector& chestPos){
+// Teleport the CANNON with a wide clamp — vehicles live on a bigger
+// replicated-move envelope than pawns, so we can snap over several
+// hundred meters per tick instead of 31m.
+void WarpCannon(const LocalPlayerCache& lp,
+                uintptr_t cannon,
+                const FVector& chestPos){
     uintptr_t cannonRoot = cf::mem::R<uintptr_t>(cannon + cf::off::Pawn_RootComponent);
     if(!cannonRoot) return;
 
@@ -55,19 +59,13 @@ void ParkCannonAboveChest(const LocalPlayerCache& lp,
     FVector target = chestPos;
     target.z += g_cfg.hoverHeight_cm.load();
 
-    // Clamp the cannon's per-tick delta the same way we clamp player
-    // teleports — cannons replicate position too, and a snap over the
-    // anti-warp cap burns the vehicle.
-    FVector next = cf::ab::clamp::teleport(cur, target, /*maxDelta_cm*/ 3100.f);
+    FVector next = cf::ab::clamp::teleport(cur, target,
+                                           g_cfg.cannonTeleportCap_cm.load());
     cf::mem::Write(cannonRoot + cf::off::Scene_RelativeLocation, &next, sizeof(FVector));
 
-    // Pin velocity to zero so the vehicle doesn't physics-slide off.
     FVector zero{};
     cf::mem::Write(cannonRoot + cf::off::Scene_ComponentVelocity, &zero, sizeof(FVector));
 
-    // Also drag the player with the cannon so the seat occupancy stays
-    // bound — Fortnite yeets the driver when the vehicle moves faster
-    // than its own replicated speed envelope.
     if(g_cfg.playerRidesCannon.load() && lp.rootComp){
         FVector seat = next;
         seat.z += 80.f;
@@ -76,9 +74,7 @@ void ParkCannonAboveChest(const LocalPlayerCache& lp,
     }
 }
 
-// Aim the cannon straight down and fire. The ball spawns with the
-// cannon's muzzle rotation; low muzzle speed keeps the ball inside the
-// chest's hit volume instead of punching through.
+// One-shot aim + fire write. Called many times per second on the hot path.
 void SmashDown(uintptr_t cannon){
     uintptr_t root = cf::mem::R<uintptr_t>(cannon + cf::off::Pawn_RootComponent);
     if(!root) return;
@@ -110,20 +106,32 @@ uintptr_t PickNearestCannon(const LocalPlayerCache& lp,
     return best;
 }
 
-uintptr_t PickNextChest(const LocalPlayerCache& lp,
-                        const std::vector<Actor>& actors,
-                        float maxRange_m,
-                        uintptr_t skip){
-    uintptr_t best = 0;
-    float     bestD = maxRange_m * 100.f;
+// Build a sorted queue of unlooted chests nearest to `from`. Capped at
+// `lookahead` entries. This runs every tick but is cheap: an actor
+// list of ~2000 items filters to a chest set of a few dozen.
+void BuildQueue(const FVector& from,
+                const std::vector<Actor>& actors,
+                float maxRange_m,
+                int lookahead,
+                std::vector<uintptr_t>& out){
+    out.clear();
+    out.reserve(lookahead);
+
+    struct Entry { uintptr_t addr; float d; };
+    std::vector<Entry> pool;
+    pool.reserve(64);
+    float maxCm = maxRange_m * 100.f;
     for(auto& a : actors){
         if(!(a.isChest || a.isLootDrop)) continue;
-        if(a.addr == skip) continue;
         if(g_cfg.skipLootedChests.load() && IsChestLooted(a.addr)) continue;
-        float d = (a.pos - lp.pos).Len();
-        if(d < bestD){ bestD = d; best = a.addr; }
+        float d = (a.pos - from).Len();
+        if(d > maxCm) continue;
+        pool.push_back({a.addr, d});
     }
-    return best;
+    std::sort(pool.begin(), pool.end(),
+              [](const Entry& a, const Entry& b){ return a.d < b.d; });
+    int n = std::min((int)pool.size(), lookahead);
+    for(int i=0;i<n;++i) out.push_back(pool[i].addr);
 }
 
 } // namespace
@@ -139,22 +147,23 @@ void Tick(const LocalPlayerCache& lp,
     if(!g_cfg.enabled.load()) return;
     if(!lp.pawn || !lp.rootComp) return;
 
-    // 1. Lock the active cannon.
+    // 1. Lock active cannon (keeps the cannon handle sticky across chests).
     if(!p.activeCannon){
         p.activeCannon = PickNearestCannon(lp, actors, g_cfg.maxRange_m.load());
         if(!p.activeCannon) return;
     } else {
-        // Verify it's still in the actor list (game may despawn it).
-        bool stillThere = false;
-        for(auto& a : actors) if(a.addr == p.activeCannon && a.isCannon){ stillThere = true; break; }
-        if(!stillThere){ p.activeCannon = 0; return; }
+        bool still = false;
+        for(auto& a : actors) if(a.addr == p.activeCannon && a.isCannon){ still = true; break; }
+        if(!still){ p.activeCannon = 0; return; }
     }
 
-    // 2. Pick the next unlooted chest.
-    if(!p.targetChest || IsChestLooted(p.targetChest)){
-        p.targetChest = PickNextChest(lp, actors, g_cfg.maxRange_m.load(), 0);
-        if(!p.targetChest) return;
-    }
+    uintptr_t cannonRoot = cf::mem::R<uintptr_t>(p.activeCannon + cf::off::Pawn_RootComponent);
+    if(!cannonRoot){ p.activeCannon = 0; return; }
+    FVector cannonPos = cf::mem::R<FVector>(cannonRoot + cf::off::Scene_RelativeLocation);
+
+    // 2. Rebuild the near-queue every tick so we can multi-fire.
+    BuildQueue(cannonPos, actors, g_cfg.maxRange_m.load(),
+               g_cfg.lookahead.load(), p.prequeue);
 
     // Visual snapshot.
     {
@@ -164,7 +173,7 @@ void Tick(const LocalPlayerCache& lp,
             if(!(a.isChest || a.isLootDrop)) continue;
             ChestVisual v{};
             v.actor = a;
-            v.queuedAsTarget = (a.addr == p.targetChest);
+            v.queuedAsTarget = (!p.prequeue.empty() && a.addr == p.prequeue.front());
             v.reachable      = (a.pos - lp.pos).Len() < g_cfg.maxRange_m.load()*100.f;
             snap.push_back(v);
         }
@@ -172,51 +181,85 @@ void Tick(const LocalPlayerCache& lp,
         p.visualSnap = std::move(snap);
     }
 
-    // 3. Read the chest pos, park the cannon directly above it.
+    if(p.prequeue.empty()){ p.targetChest = 0; return; }
+
+    // 3. Fire-on-approach: scan the pre-queue, any chest already in
+    // fireRange gets smashed IN THIS TICK (up to maxFiresPerTick).
+    // Multi-fire is the key to 300+ chests/min when chests cluster.
+    double now = NowSec();
+    float  fr  = g_cfg.fireRange_cm.load();
+    int    budget = g_cfg.maxFiresPerTick.load();
+
+    if(g_cfg.fireOnApproach.load()){
+        for(auto it = p.prequeue.begin(); it != p.prequeue.end() && budget > 0; ){
+            uintptr_t chest = *it;
+            uintptr_t chestRoot = cf::mem::R<uintptr_t>(chest + cf::off::Pawn_RootComponent);
+            if(!chestRoot){ it = p.prequeue.erase(it); continue; }
+            FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
+            float horiz = std::sqrt((cannonPos.x-chestPos.x)*(cannonPos.x-chestPos.x) +
+                                    (cannonPos.y-chestPos.y)*(cannonPos.y-chestPos.y));
+            if(horiz < fr && (now - p.lastFireTime) >= g_cfg.cooldownSec.load()){
+                SmashDown(p.activeCannon);
+                p.lastFireTime = now;
+                if(g_cfg.openOnTouch.load()){
+                    FlagChestSearched(chest);
+                    p.smashed.fetch_add(1);
+                }
+                it = p.prequeue.erase(it);
+                --budget;
+                int lim = g_cfg.chestsPerSession.load();
+                if(lim > 0 && (int)p.smashed.load() >= lim){
+                    g_cfg.enabled.store(false);
+                    return;
+                }
+                continue;
+            }
+            ++it;
+        }
+    }
+
+    if(p.prequeue.empty()){ p.targetChest = 0; return; }
+
+    // 4. Warp the cannon to the first chest still in queue (closest).
+    p.targetChest = p.prequeue.front();
     uintptr_t chestRoot = cf::mem::R<uintptr_t>(p.targetChest + cf::off::Pawn_RootComponent);
-    if(!chestRoot){ p.targetChest = 0; return; }
+    if(!chestRoot){ p.prequeue.erase(p.prequeue.begin()); return; }
     FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
 
     if(g_cfg.teleportCannon.load()){
-        ParkCannonAboveChest(lp, p.activeCannon, chestPos);
+        WarpCannon(lp, p.activeCannon, chestPos);
     }
 
-    // 4. Verify we're actually above the chest before firing — otherwise
-    //    a mid-warp shot wastes the cooldown.
-    uintptr_t cannonRoot = cf::mem::R<uintptr_t>(p.activeCannon + cf::off::Pawn_RootComponent);
-    FVector   cannonPos  = cf::mem::R<FVector>(cannonRoot + cf::off::Scene_RelativeLocation);
-    float dx = cannonPos.x - chestPos.x;
-    float dy = cannonPos.y - chestPos.y;
-    float dz = cannonPos.z - chestPos.z;
-    float horiz = std::sqrt(dx*dx + dy*dy);
-    bool aligned = horiz < 180.f && dz > g_cfg.hoverHeight_cm.load()*0.6f;
+    // 5. Shot. Alignment skipped by default; raw write+fire same tick.
+    cannonPos = cf::mem::R<FVector>(cannonRoot + cf::off::Scene_RelativeLocation);
+    bool ok = true;
+    if(!g_cfg.skipAlignmentCheck.load()){
+        float horiz = std::sqrt((cannonPos.x-chestPos.x)*(cannonPos.x-chestPos.x) +
+                                (cannonPos.y-chestPos.y)*(cannonPos.y-chestPos.y));
+        float dz    = cannonPos.z - chestPos.z;
+        ok = horiz < 180.f && dz > g_cfg.hoverHeight_cm.load()*0.6f;
+    }
+    if(!ok) return;
 
-    if(!aligned) return;
-
-    // 5. Smash.
-    double now = NowSec();
     if(g_cfg.autoFire.load() && (now - p.lastFireTime) >= g_cfg.cooldownSec.load()){
         SmashDown(p.activeCannon);
         p.lastFireTime = now;
-
-        // The ball spawns and hits the chest within ~1 frame at this
-        // drop height — mark the chest searched so the next planner
-        // tick doesn't re-queue it. Pirate Token drop fires from the
-        // server-side cannon-damage-container path, independent of
-        // this flag.
         if(g_cfg.openOnTouch.load()){
             FlagChestSearched(p.targetChest);
-            ++p.smashed;
-            if(g_cfg.chestsPerSession.load() > 0 &&
-               (int)p.smashed >= g_cfg.chestsPerSession.load()){
+            p.smashed.fetch_add(1);
+            int lim = g_cfg.chestsPerSession.load();
+            if(lim > 0 && (int)p.smashed.load() >= lim){
                 g_cfg.enabled.store(false);
                 return;
             }
         }
-
-        // Advance to the next chest. Keep the same cannon.
-        p.targetChest = PickNextChest(lp, actors, g_cfg.maxRange_m.load(), p.targetChest);
+        p.prequeue.erase(p.prequeue.begin());
+        p.targetChest = 0;
     }
 }
+
+// Exposed so the overlay HUD can show the live Pirate Token count.
+uint32_t SmashedThisSession(){ return p.smashed.load(); }
+void     ResetSmashCounter(){ p.smashed.store(0); }
 
 } // namespace cf::feat
