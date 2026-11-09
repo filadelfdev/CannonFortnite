@@ -15,39 +15,34 @@ struct CannonChestCfg {
     std::atomic<bool>  teleportCannon{true};
     std::atomic<bool>  playerRidesCannon{true};
     std::atomic<bool>  preferHuntersHaven{true};
-    std::atomic<float> maxRange_m{3000.f};
-    // 60ms = ~16 smashes/sec theoretical, 300/min ≥ 100ms budget.
-    // Default 0.07s leaves slack for the token drop RPC round-trip.
-    std::atomic<float> cooldownSec{0.07f};
+    // v4 defaults — tuned for sustainable rate, not peak throughput.
+    // ~2 smashes/sec with ±30% jitter = ~110-130/min sustained.
+    // Still ~15-18M xp/min per the token math, well above a human farm.
+    std::atomic<float> maxRange_m{2000.f};
+    std::atomic<float> cooldownMeanMs{480.f};   // 480ms ± 180ms
+    std::atomic<float> cooldownSpreadMs{180.f};
     std::atomic<float> hoverHeight_cm{380.f};
+    std::atomic<float> hoverJitter_cm{40.f};
     std::atomic<float> smashMuzzleSpeed{2400.f};
     std::atomic<float> aimPitchDeg{-89.f};
+    std::atomic<float> aimJitterDeg{1.5f};      // ±1.5° on each aim write
     std::atomic<int>   chestsPerSession{0};
-    std::atomic<bool>  openOnTouch{true};
+    std::atomic<bool>  openOnTouch{false};      // v3 flagged client-side; v4 waits for server confirm
+    std::atomic<float> serverConfirmGraceMs{220.f}; // delay before marking
     std::atomic<bool>  skipLootedChests{true};
-    std::atomic<bool>  ignoreTerrain{true};
 
-    // Burst tuning — needed for 300+ chests/min.
-    // Teleport-cannon clamp ceiling: raised from 3100cm (player warp
-    // cap) to 50000cm because cannons are treated by the server as
-    // vehicles, which have a wider replicated-move envelope.
-    std::atomic<float> cannonTeleportCap_cm{50000.f};
-    // Skip the horizontal/vertical alignment check — write-fire-move
-    // in the same tick. Loses ~2% of shots to mid-warp but doubles
-    // throughput at range.
-    std::atomic<bool>  skipAlignmentCheck{true};
-    // Parallel pre-queue: how many chests ahead to pre-scan.
-    std::atomic<int>   lookahead{8};
-    // Fire-while-moving: issue the fire RPC-equivalent as soon as the
-    // cannon is within 350cm horizontal of the target, don't wait
-    // for the full park. Server-side break still registers because
-    // the ball is spawned at the cannon's current pos with pitch -89
-    // and the chest is directly below within one tick.
-    std::atomic<bool>  fireOnApproach{true};
-    std::atomic<float> fireRange_cm{400.f};
-    // Multi-fire per tick: how many smashes to queue in a single tick
-    // when we have multiple chests inside fireRange.
-    std::atomic<int>   maxFiresPerTick{3};
+    // Vehicle warp cap — server-side envelope is ~8000cm/tick for
+    // cannons. v3 used 50000, which is what got the account burned.
+    std::atomic<float> cannonTeleportCap_cm{7500.f};
+    std::atomic<bool>  skipAlignmentCheck{false};   // v4 waits for align
+    std::atomic<int>   lookahead{4};
+    std::atomic<bool>  fireOnApproach{false};       // single, confirmed fire
+    std::atomic<float> fireRange_cm{250.f};
+    std::atomic<int>   maxFiresPerTick{1};          // one smash per tick
+
+    // v4 mandatory: prefer the RPC call path over direct writes. Falls
+    // through to writes only if rpc::Ready() is false.
+    std::atomic<bool>  preferRpc{true};
 };
 
 extern CannonChestCfg g_cfg;

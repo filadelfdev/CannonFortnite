@@ -55,6 +55,8 @@ target_link_libraries(cannonfn PRIVATE
     iphlpapi
     winmm
     dwmapi
+    bcrypt
+    shell32
 )
 
 set_target_properties(cannonfn PROPERTIES

@@ -24,7 +24,10 @@
 #include "antiban/antiban.h"
 #include "antiban/hash.h"
 #include "antiban/heartbeat.h"
+#include "antiban/jitter.h"
+#include "antiban/rpc_path.h"
 #include "spoofer/spoofer.h"
+#include "spoofer/rotator.h"
 #include "util/log.h"
 
 #include <windows.h>
@@ -123,12 +126,34 @@ void PerFrame(float dt, float sw, float sh){
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     cf::log::SetLevel(cf::log::Level::Info);
-    CF_INFO("cf :: startup");
+    CF_INFO("cf :: startup v4");
 
-    // Antiban init first — zero header before anything else enumerates it.
+    // v4 antiban init order matters:
+    //   1. seed the jitter RNG  (used by every subsequent step)
+    //   2. baseline .text       (SelfIntegrityOk needs this BEFORE zero)
+    //   3. zero the PE header   (noise reduction, not integrity)
+    //   4. install VEH          (eats BP/SS from any poke)
+    //   5. hide worker threads
+    cf::ab::jitter::Seed();
     cf::ab::InstallVEH();
     cf::ab::ZeroOwnHeader();
     cf::ab::HideSelfThreads();
+
+    // HWID rotation — one fresh fingerprint per session from the ledger.
+    std::vector<cf::spoof::rot::Slot> ledger;
+    if(!cf::spoof::rot::LoadLedger(ledger)){
+        cf::spoof::rot::Seed(ledger, 32);
+        cf::spoof::rot::SaveLedger(ledger);
+        CF_INFO("hwid ledger seeded (32 slots)");
+    }
+    cf::spoof::Fingerprint fp{};
+    if(cf::spoof::rot::PickNext(ledger, fp)){
+        cf::spoof::Apply(fp);
+        cf::spoof::ApplyKernel(fp);
+        cf::spoof::rot::SaveLedger(ledger);
+        CF_INFO("hwid rotated: %d clean slots remain",
+                cf::spoof::rot::RemainingClean(ledger));
+    }
 
     auto ac = cf::ab::DetectAnticheat();
     if(ac != cf::ab::AcKind::None){
@@ -153,19 +178,34 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
 
     // Try to open the kernel driver; if \\.\CfRead answers, arm it with
     // the target image hash and route every memory op through MmCopyVM.
-    // If it fails (driver not loaded), user-mode path stays live.
+    // If it fails (driver not loaded), user-mode path stays live with
+    // a loud warning — v4 defaults assume the kernel path so running
+    // without it is a documented risk.
+    bool kernelUp = false;
     if(cf::kmem::Open()){
         uint64_t targetHashNum = std::wcstoull(targetHash, nullptr, 16);
         if(cf::kmem::Arm(targetHashNum)){
             cf::mem::UseKernel(true);
+            kernelUp = true;
             CF_INFO("kernel read path online");
         }
+    }
+    if(!kernelUp){
+        CF_ERR("KERNEL DRIVER NOT LOADED — direct-write path only.");
+        CF_ERR("v4 strongly recommends the driver; ban risk is significantly higher without it.");
+        CF_ERR("Load with:  sc start CfRead  &&  sc start CfSpoof");
     }
 
     if(!cf::sdk::ResolveGlobals()){
         CF_ERR("engine globals unresolved — check offsets.h");
         cf::mem::Detach();
         return 3;
+    }
+
+    // Resolve the RPC call sites. Without these, cannon_chest falls
+    // back to direct writes (v3 behaviour) — works, but ban risk up.
+    if(!cf::ab::rpc::Resolve()){
+        CF_WARN("RPC path offline — DIRECT WRITES ACTIVE — raise cooldown");
     }
 
     // Spoofer — stash the real fingerprint so panic restores on exit.

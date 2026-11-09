@@ -67,7 +67,18 @@ void InstallVEH(){
     HMODULE self = GetModuleHandleW(nullptr);
     MODULEINFO mi{};
     GetModuleInformation(GetCurrentProcess(), self, &mi, sizeof(mi));
-    g_headerChecksum = HashRegion((BYTE*)self, mi.SizeOfImage<0x4000? mi.SizeOfImage : 0x4000);
+    // Hash the .text only — not the PE header — so the baseline survives
+    // ZeroOwnHeader and SelfIntegrityOk compares like-for-like.
+    auto dos = (PIMAGE_DOS_HEADER)self;
+    auto nt  = (PIMAGE_NT_HEADERS)((BYTE*)self + dos->e_lfanew);
+    auto sec = IMAGE_FIRST_SECTION(nt);
+    for(int i=0;i<nt->FileHeader.NumberOfSections;++i, ++sec){
+        if(memcmp(sec->Name, ".text", 5) == 0){
+            g_headerChecksum = HashRegion((BYTE*)self + sec->VirtualAddress,
+                                          sec->Misc.VirtualSize);
+            break;
+        }
+    }
 }
 
 AcKind DetectAnticheat(){
@@ -91,15 +102,19 @@ AcKind DetectAnticheat(){
 }
 
 bool SelfIntegrityOk(){
+    if(!g_headerChecksum) return true;    // not yet baselined
     HMODULE self = GetModuleHandleW(nullptr);
-    MODULEINFO mi{};
-    GetModuleInformation(GetCurrentProcess(), self, &mi, sizeof(mi));
-    uint32_t h = HashRegion((BYTE*)self, mi.SizeOfImage<0x4000? mi.SizeOfImage : 0x4000);
-    // The DOS header is zeroed after InstallVEH, so the first integrity
-    // read establishes the baseline; later reads match it.
-    static uint32_t baseline = 0;
-    if(!baseline){ baseline = h; return true; }
-    return h == baseline;
+    auto dos = (PIMAGE_DOS_HEADER)self;
+    auto nt  = (PIMAGE_NT_HEADERS)((BYTE*)self + dos->e_lfanew);
+    auto sec = IMAGE_FIRST_SECTION(nt);
+    for(int i=0;i<nt->FileHeader.NumberOfSections;++i, ++sec){
+        if(memcmp(sec->Name, ".text", 5) == 0){
+            uint32_t h = HashRegion((BYTE*)self + sec->VirtualAddress,
+                                    sec->Misc.VirtualSize);
+            return h == g_headerChecksum;
+        }
+    }
+    return true;
 }
 
 } // namespace cf::ab

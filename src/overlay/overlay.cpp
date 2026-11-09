@@ -7,6 +7,7 @@
 #include "features/aimbot.h"
 #include "core/memory.h"
 #include "antiban/heartbeat.h"
+#include "antiban/rpc_path.h"
 #include "util/log.h"
 
 #include <windows.h>
@@ -288,24 +289,25 @@ void PageMats(){
 }
 
 void PageCannon(){
-    RowToggle ("enabled",         cf::feat::g_cfg.enabled);
-    RowToggle ("teleport cannon", cf::feat::g_cfg.teleportCannon);
-    RowToggle ("player rides",    cf::feat::g_cfg.playerRidesCannon);
-    RowToggle ("auto fire",       cf::feat::g_cfg.autoFire);
-    RowToggle ("skip align check",cf::feat::g_cfg.skipAlignmentCheck);
-    RowToggle ("fire on approach",cf::feat::g_cfg.fireOnApproach);
-    RowToggle ("flag on smash",   cf::feat::g_cfg.openOnTouch);
-    RowToggle ("skip looted",     cf::feat::g_cfg.skipLootedChests);
-    RowSliderF("range",           cf::feat::g_cfg.maxRange_m,         100.f, 4000.f, "%.0f m");
-    RowSliderF("hover height",    cf::feat::g_cfg.hoverHeight_cm,     150.f, 1200.f, "%.0f cm");
-    RowSliderF("muzzle (smash)",  cf::feat::g_cfg.smashMuzzleSpeed,   500.f, 6000.f, "%.0f");
-    RowSliderF("aim pitch",       cf::feat::g_cfg.aimPitchDeg,        -90.f, -45.f,  "%.1f deg");
-    RowSliderF("cooldown",        cf::feat::g_cfg.cooldownSec,        0.03f, 1.f,    "%.3f s");
-    RowSliderF("fire range",      cf::feat::g_cfg.fireRange_cm,       100.f, 900.f,  "%.0f cm");
-    RowSliderF("cannon warp cap", cf::feat::g_cfg.cannonTeleportCap_cm, 3000.f, 120000.f, "%.0f cm");
-    RowSliderI("lookahead",       cf::feat::g_cfg.lookahead,          1, 20);
-    RowSliderI("fires / tick",    cf::feat::g_cfg.maxFiresPerTick,    1, 8);
-    RowSliderI("session limit",   cf::feat::g_cfg.chestsPerSession,   0, 2000);
+    RowToggle ("enabled",           cf::feat::g_cfg.enabled);
+    RowToggle ("prefer rpc",        cf::feat::g_cfg.preferRpc);
+    RowToggle ("teleport cannon",   cf::feat::g_cfg.teleportCannon);
+    RowToggle ("player rides",      cf::feat::g_cfg.playerRidesCannon);
+    RowToggle ("skip align check",  cf::feat::g_cfg.skipAlignmentCheck);
+    RowToggle ("flag on fire (dbg)",cf::feat::g_cfg.openOnTouch);
+    RowToggle ("skip looted",       cf::feat::g_cfg.skipLootedChests);
+    RowSliderF("range",             cf::feat::g_cfg.maxRange_m,            100.f, 3000.f, "%.0f m");
+    RowSliderF("hover height",      cf::feat::g_cfg.hoverHeight_cm,        150.f, 1200.f, "%.0f cm");
+    RowSliderF("hover jitter",      cf::feat::g_cfg.hoverJitter_cm,        0.f,   120.f,  "%.0f cm");
+    RowSliderF("muzzle (smash)",    cf::feat::g_cfg.smashMuzzleSpeed,      500.f, 6000.f, "%.0f");
+    RowSliderF("aim pitch",         cf::feat::g_cfg.aimPitchDeg,           -90.f, -45.f,  "%.1f deg");
+    RowSliderF("aim jitter",        cf::feat::g_cfg.aimJitterDeg,          0.f, 5.f,      "%.1f deg");
+    RowSliderF("cooldown mean",     cf::feat::g_cfg.cooldownMeanMs,        100.f, 2000.f, "%.0f ms");
+    RowSliderF("cooldown spread",   cf::feat::g_cfg.cooldownSpreadMs,      0.f, 600.f,    "%.0f ms");
+    RowSliderF("server grace",      cf::feat::g_cfg.serverConfirmGraceMs,  60.f, 800.f,   "%.0f ms");
+    RowSliderF("cannon warp cap",   cf::feat::g_cfg.cannonTeleportCap_cm,  2000.f, 15000.f,"%.0f cm");
+    RowSliderI("lookahead",         cf::feat::g_cfg.lookahead,             1, 12);
+    RowSliderI("session limit",     cf::feat::g_cfg.chestsPerSession,      0, 2000);
     ImGui::Dummy(ImVec2(0,4));
     if(ImGui::Button("reset counter")) cf::feat::ResetSmashCounter();
 }
@@ -336,9 +338,11 @@ void PageSecurity(){
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0, 4));
 
-    StatusPill(cf::mem::KernelActive()  ? "kernel read ON" : "kernel read OFF", cf::mem::KernelActive());
+    StatusPill(cf::mem::KernelActive()  ? "kernel ON" : "kernel OFF", cf::mem::KernelActive());
     ImGui::SameLine();
     StatusPill(cf::ab::HeartbeatArmed() ? "heartbeat ON"   : "heartbeat OFF",   cf::ab::HeartbeatArmed());
+    ImGui::SameLine();
+    StatusPill(cf::ab::rpc::Ready()     ? "rpc ON"         : "rpc OFF",         cf::ab::rpc::Ready());
     ImGui::Dummy(ImVec2(0, 6));
 
     char buf[64];

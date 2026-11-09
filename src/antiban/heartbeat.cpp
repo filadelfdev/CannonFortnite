@@ -91,6 +91,60 @@ void MaskThreadTrace(){
     CloseHandle(snap);
 }
 
+// Hook the EAC/BE report callback at the NtDeviceIoControlFile layer.
+// The AC module's periodic integrity packet goes through a syscall
+// batch: open its service handle, DeviceIoControl with code 0xB2C,
+// close. We splice ntdll's NtDeviceIoControlFile so that when the
+// IOCTL destination matches the AC service handle, we substitute a
+// pre-recorded "clean" payload captured on an unpatched run.
+using NtDeviceIoControlFile_t = NTSTATUS(NTAPI*)(
+    HANDLE, HANDLE, PIO_APC_ROUTINE, PVOID, PIO_STATUS_BLOCK,
+    ULONG, PVOID, ULONG, PVOID, ULONG);
+NtDeviceIoControlFile_t g_realNtDevIoctl = nullptr;
+
+constexpr ULONG EAC_REPORT_IOCTL = 0x00000B2C;
+
+static std::vector<uint8_t> g_cleanReport;   // clean snapshot payload
+static HANDLE g_eacHandle = nullptr;
+
+NTSTATUS NTAPI HookedNtDevIoctl(HANDLE h, HANDLE ev, PIO_APC_ROUTINE apc, PVOID ctx,
+                                 PIO_STATUS_BLOCK iosb, ULONG code,
+                                 PVOID in, ULONG inLen, PVOID out, ULONG outLen){
+    // Record EAC handle on first IOCTL to its code.
+    if(code == EAC_REPORT_IOCTL){
+        if(!g_eacHandle){
+            g_eacHandle = h;
+            if(in && inLen > 0 && inLen <= 4096){
+                g_cleanReport.assign((uint8_t*)in, (uint8_t*)in + inLen);
+            }
+        } else if(h == g_eacHandle && !g_cleanReport.empty() && in && inLen >= g_cleanReport.size()){
+            // Substitute the clean payload on subsequent reports.
+            memcpy(in, g_cleanReport.data(), g_cleanReport.size());
+        }
+    }
+    return g_realNtDevIoctl(h, ev, apc, ctx, iosb, code, in, inLen, out, outLen);
+}
+
+void InstallNtIoctlHook(){
+    if(g_realNtDevIoctl) return;
+    HMODULE ntd = GetModuleHandleA("ntdll.dll");
+    auto fn = (BYTE*)GetProcAddress(ntd, "NtDeviceIoControlFile");
+    if(!fn) return;
+    // In-line trampoline — allocate near, copy prolog, jump.
+    DWORD old=0; VirtualProtect(fn, 16, PAGE_EXECUTE_READWRITE, &old);
+    BYTE* tramp = (BYTE*)VirtualAlloc(nullptr, 64, MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    memcpy(tramp, fn, 16);
+    tramp[16] = 0xFF; tramp[17] = 0x25;   // jmp [rip+0]
+    *(uint32_t*)(tramp+18) = 0;
+    *(uintptr_t*)(tramp+22) = (uintptr_t)fn + 16;
+    g_realNtDevIoctl = (NtDeviceIoControlFile_t)tramp;
+
+    BYTE patch[14] = { 0xFF, 0x25, 0, 0, 0, 0 };
+    *(uintptr_t*)(patch+6) = (uintptr_t)&HookedNtDevIoctl;
+    memcpy(fn, patch, 14);
+    VirtualProtect(fn, 16, old, &old);
+}
+
 void DecoyHandles(){
     // Create three throwaway named-object handles so the handle table
     // snapshot looks indistinguishable from a clean host. The OS
@@ -119,6 +173,7 @@ void Worker(){
     }
 
     DecoyHandles();
+    InstallNtIoctlHook();
 
     // Heartbeat loop — rearm every 200ms with a ±80ms jitter so it
     // never lines up with any single AC poll interval.
