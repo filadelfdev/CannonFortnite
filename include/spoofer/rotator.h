@@ -25,4 +25,12 @@ bool PickNext(std::vector<Slot>& ledger, Fingerprint& out);
 bool BurnCurrent(std::vector<Slot>& ledger);
 int  RemainingClean(const std::vector<Slot>& ledger);
 
+// Session-level accessors for the overlay HUD + "burn" button. These
+// mirror the ledger the main loop loaded at startup; writes here mark
+// the current slot and persist on next PickNext/BurnCurrent call.
+int  CurrentSlotIndex();        // -1 if no slot active
+int  TotalSlots();
+int  CleanRemaining();
+void MarkCurrentBurnedPersist();
+
 } // namespace cf::spoof::rot

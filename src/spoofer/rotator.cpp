@@ -162,6 +162,12 @@ bool Deserialize(const std::vector<uint8_t>& in, std::vector<Slot>& out){
 
 thread_local int32_t g_currentSlotIndex = -1;
 
+// Session-level cache of the ledger so the overlay can read/mutate it
+// without the main loop passing the vector around.
+std::mutex              g_sessionLock;
+std::vector<Slot>       g_sessionLedger;
+int32_t                 g_sessionCurrent = -1;
+
 } // namespace
 
 bool LoadLedger(std::vector<Slot>& out){
@@ -210,6 +216,10 @@ bool PickNext(std::vector<Slot>& ledger, Fingerprint& out){
     g_currentSlotIndex = bestIdx;
     ledger[bestIdx].lastUsedUnix = (uint64_t)std::time(nullptr);
     out = ledger[bestIdx].fp;
+    // mirror into session cache
+    std::scoped_lock _(g_sessionLock);
+    g_sessionLedger = ledger;
+    g_sessionCurrent = bestIdx;
     return true;
 }
 
@@ -224,6 +234,25 @@ int RemainingClean(const std::vector<Slot>& ledger){
     int n = 0;
     for(auto& s : ledger) if(!s.burned) ++n;
     return n;
+}
+
+int CurrentSlotIndex(){
+    std::scoped_lock _(g_sessionLock);
+    return g_sessionCurrent;
+}
+int TotalSlots(){
+    std::scoped_lock _(g_sessionLock);
+    return (int)g_sessionLedger.size();
+}
+int CleanRemaining(){
+    std::scoped_lock _(g_sessionLock);
+    return RemainingClean(g_sessionLedger);
+}
+void MarkCurrentBurnedPersist(){
+    std::scoped_lock _(g_sessionLock);
+    if(g_sessionCurrent < 0 || g_sessionCurrent >= (int)g_sessionLedger.size()) return;
+    g_sessionLedger[g_sessionCurrent].burned = true;
+    SaveLedger(g_sessionLedger);
 }
 
 } // namespace cf::spoof::rot

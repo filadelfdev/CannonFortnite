@@ -8,6 +8,7 @@
 #include "core/memory.h"
 #include "antiban/heartbeat.h"
 #include "antiban/rpc_path.h"
+#include "spoofer/rotator.h"
 #include "util/log.h"
 
 #include <windows.h>
@@ -345,11 +346,32 @@ void PageSecurity(){
     StatusPill(cf::ab::rpc::Ready()     ? "rpc ON"         : "rpc OFF",         cf::ab::rpc::Ready());
     ImGui::Dummy(ImVec2(0, 6));
 
-    char buf[64];
-    std::snprintf(buf, 64, "chests opened this session: %u", cf::feat::Looted());
+    char buf[160];
+    std::snprintf(buf, 160, "chests smashed: %u   ·   pickups: %u",
+                  cf::feat::SmashedThisSession(), cf::feat::Looted());
     ImGui::TextUnformatted(buf);
 
-    if(ImGui::Button("reset counter")) cf::feat::ResetLooted();
+    ImGui::Dummy(ImVec2(0, 8));
+
+    int cur   = cf::spoof::rot::CurrentSlotIndex();
+    int total = cf::spoof::rot::TotalSlots();
+    int clean = cf::spoof::rot::CleanRemaining();
+    std::snprintf(buf, 160, "hwid rotator: slot %d of %d  ·  %d clean remaining",
+                  cur, total, clean);
+    ImGui::TextUnformatted(buf);
+
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.80f, 0.17f, 0.17f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.22f, 0.22f, 1.f));
+    if(ImGui::Button("burn current slot (took a ban)")){
+        cf::spoof::rot::MarkCurrentBurnedPersist();
+    }
+    ImGui::PopStyleColor(2);
+    ImGui::SameLine();
+    if(ImGui::Button("reset counter")){
+        cf::feat::ResetSmashCounter();
+        cf::feat::ResetLooted();
+    }
     ImGui::SameLine();
     if(ImGui::Button("panic exit"))    g_quit = true;
 }
