@@ -1,6 +1,9 @@
 #include "overlay/overlay.h"
 #include "features/cannon_chest.h"
+#include "features/route.h"
 #include "features/speed.h"
+#include "core/memory.h"
+#include "antiban/heartbeat.h"
 #include "util/log.h"
 
 #include <windows.h>
@@ -138,10 +141,41 @@ void DrawFrame(){
     }
 
     if(g_ovCfg.showMenu.load()){
-        ImGui::SetNextWindowSize(ImVec2(360, 420), ImGuiCond_FirstUseEver);
-        ImGui::Begin("CF :: cannon-chest ripper", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::SetNextWindowSize(ImVec2(400, 560), ImGuiCond_FirstUseEver);
+        ImGui::Begin("CF :: cannon-chest ripper v2", nullptr, ImGuiWindowFlags_NoSavedSettings);
 
-        if(ImGui::CollapsingHeader("cannon → chest", ImGuiTreeNodeFlags_DefaultOpen)){
+        // status bar: kernel / heartbeat / opened
+        ImGui::Text("kernel: %s   heartbeat: %s   opened: %u",
+                    cf::mem::KernelActive()    ? "ON" : "off",
+                    cf::ab::HeartbeatArmed()   ? "ON" : "off",
+                    cf::feat::Looted());
+        ImGui::Separator();
+
+        if(ImGui::CollapsingHeader("route", ImGuiTreeNodeFlags_DefaultOpen)){
+            int mode = (int)cf::feat::g_routeCfg.mode.load();
+            const char* modes[] = { "cannon arc (slow)", "teleport chain (fast)", "bulk sweep" };
+            if(ImGui::Combo("mode", &mode, modes, 3))
+                cf::feat::g_routeCfg.mode.store((cf::feat::RouteMode)mode);
+            float hop = cf::feat::g_routeCfg.hopDelta_cm.load();
+            float cad = cf::feat::g_routeCfg.hopCadence_ms.load();
+            float rng = cf::feat::g_routeCfg.chainRange_m.load();
+            bool  bo  = cf::feat::g_routeCfg.bulkOpenOnArrive.load();
+            float br  = cf::feat::g_routeCfg.bulkRadius_cm.load();
+            int   mop = cf::feat::g_routeCfg.maxOpensPerTick.load();
+            bool  rot = cf::feat::g_routeCfg.rotateToTarget.load();
+            bool  tier= cf::feat::g_routeCfg.preferUnopenedTier.load();
+            if(ImGui::SliderFloat("hop size (cm)",   &hop, 500.f, 3500.f))  cf::feat::g_routeCfg.hopDelta_cm.store(hop);
+            if(ImGui::SliderFloat("hop cadence (ms)",&cad, 10.f, 300.f))    cf::feat::g_routeCfg.hopCadence_ms.store(cad);
+            if(ImGui::SliderFloat("chain range (m)", &rng, 200.f, 4000.f))  cf::feat::g_routeCfg.chainRange_m.store(rng);
+            if(ImGui::Checkbox("bulk open on arrive",&bo))  cf::feat::g_routeCfg.bulkOpenOnArrive.store(bo);
+            if(ImGui::SliderFloat("bulk radius (cm)",&br, 200.f, 2500.f))   cf::feat::g_routeCfg.bulkRadius_cm.store(br);
+            if(ImGui::SliderInt  ("max opens / tick",&mop, 1, 12))          cf::feat::g_routeCfg.maxOpensPerTick.store(mop);
+            if(ImGui::Checkbox("face target",        &rot)) cf::feat::g_routeCfg.rotateToTarget.store(rot);
+            if(ImGui::Checkbox("prefer rare tier",   &tier))cf::feat::g_routeCfg.preferUnopenedTier.store(tier);
+            if(ImGui::Button("reset counter")) cf::feat::ResetLooted();
+        }
+
+        if(ImGui::CollapsingHeader("cannon → chest")){
             bool  e   = cf::feat::g_cfg.enabled.load();
             bool  tp  = cf::feat::g_cfg.teleportIntoCannon.load();
             bool  af  = cf::feat::g_cfg.autoFire.load();

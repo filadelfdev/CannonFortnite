@@ -7,14 +7,14 @@ namespace cf::feat {
 
 struct CannonChestCfg {
     std::atomic<bool>  enabled{false};
-    std::atomic<bool>  autoFire{true};         // fires when the arc clears
+    std::atomic<bool>  autoFire{true};
     std::atomic<bool>  teleportIntoCannon{true};
     std::atomic<bool>  preferHuntersHaven{true};
-    std::atomic<float> maxRange_m{1200.f};     // skip chests beyond this
-    std::atomic<float> cooldownSec{0.75f};     // per-fire cooldown
-    std::atomic<float> arcGravity{-980.f};     // UE cm/s^2 * scale
-    std::atomic<float> cannonMuzzleSpeed{4200.f};
-    std::atomic<int>   chestsPerBurst{3};      // ride cannon → open → repeat
+    std::atomic<float> maxRange_m{2000.f};     // widened: the planner handles far ones
+    std::atomic<float> cooldownSec{0.15f};     // cannon re-fires much faster now
+    std::atomic<float> arcGravity{-980.f};
+    std::atomic<float> cannonMuzzleSpeed{8800.f};  // ~2x stock; arc clears the whole POI
+    std::atomic<int>   chestsPerBurst{6};
     std::atomic<bool>  openOnTouch{true};
     std::atomic<bool>  skipLootedChests{true};
 };

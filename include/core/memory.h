@@ -23,9 +23,17 @@ template<typename T> T R(uintptr_t a){ T v{}; Read(a,&v,sizeof(T)); return v; }
 template<typename T> bool W(uintptr_t a, const T& v){ return Write(a,&v,sizeof(T)); }
 
 // Scatter read: coalesces adjacent regions so a hot actor loop makes
-// a handful of syscalls per tick instead of one per field.
+// one syscall per batch instead of one per field. Routes through the
+// kernel driver if armed, else coalesces user-mode reads.
 struct ScatterRange { uintptr_t src; void* dst; size_t size; };
 bool Scatter(ScatterRange* r, size_t count);
+
+// Once Attach() succeeds, the caller may hand control to the kernel
+// path: UseKernel(true) sends every future read/write over \\.\CfRead.
+// UseKernel(false) returns to the user-mode path. The hot loop checks
+// this each tick so a driver drop never stalls the overlay.
+void UseKernel(bool on);
+bool KernelActive();
 
 // Pattern scan over a loaded module (image copy, not the live proc).
 uintptr_t Pattern(uintptr_t modBase, size_t modSize,

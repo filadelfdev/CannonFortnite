@@ -11,14 +11,17 @@
 // Attribution: Built by Olivia — https://discord.gg/ojailbreaks
 
 #include "core/memory.h"
+#include "core/kmem.h"
 #include "sdk/engine.h"
 #include "sdk/offsets.h"
 #include "features/cannon_chest.h"
+#include "features/route.h"
 #include "features/speed.h"
 #include "features/esp.h"
 #include "overlay/overlay.h"
 #include "antiban/antiban.h"
 #include "antiban/hash.h"
+#include "antiban/heartbeat.h"
 #include "spoofer/spoofer.h"
 #include "util/log.h"
 
@@ -37,43 +40,50 @@ std::vector<cf::Actor> g_actors;
 std::mutex g_actorsLock;
 
 void WorkerLoop(){
-    while(g_run.load()){
-        // Enumerate once per ~16ms. Any faster and we start walking the
-        // level array through its own update, which produces split reads.
-        std::vector<uintptr_t> ptrs;
-        if(!cf::sdk::EnumerateActors(ptrs)){
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            continue;
-        }
+    // Dual-cadence loop:
+    //  * every 4ms  — refresh local player (hot path, feeds route hops)
+    //  * every 50ms — re-enumerate the full actor list (expensive)
+    // The route planner pulls a stable snapshot each tick and never
+    // walks the live UWorld array itself.
+    uint32_t frame = 0;
+    std::vector<cf::Actor> cached;
+    cached.reserve(2048);
 
+    while(g_run.load()){
         cf::LocalPlayerCache lp{};
         if(!cf::sdk::ReadLocalPlayer(lp)){
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
             continue;
         }
 
-        std::vector<cf::Actor> actors;
-        actors.reserve(ptrs.size());
-        for(auto p : ptrs){
-            cf::Actor a{};
-            a.addr      = p;
-            a.className = cf::sdk::ActorClassName(p);
-            cf::sdk::ClassifyActor(a);
-            if(!(a.isChest || a.isCannon || a.isPlayer || a.isLootDrop)) continue;
+        if((frame++ % 12) == 0){
+            std::vector<uintptr_t> ptrs;
+            if(cf::sdk::EnumerateActors(ptrs)){
+                cached.clear();
+                for(auto p : ptrs){
+                    cf::Actor a{};
+                    a.addr      = p;
+                    a.className = cf::sdk::ActorClassName(p);
+                    cf::sdk::ClassifyActor(a);
+                    if(!(a.isChest || a.isCannon || a.isPlayer || a.isLootDrop)) continue;
 
-            uintptr_t root = cf::mem::R<uintptr_t>(p + cf::off::Pawn_RootComponent);
-            if(!root) continue;
-            a.pos      = cf::mem::R<cf::FVector>(root + cf::off::Scene_RelativeLocation);
-            a.distance = (a.pos - lp.pos).Len()/100.f;
-            actors.push_back(a);
+                    uintptr_t root = cf::mem::R<uintptr_t>(p + cf::off::Pawn_RootComponent);
+                    if(!root) continue;
+                    a.pos      = cf::mem::R<cf::FVector>(root + cf::off::Scene_RelativeLocation);
+                    a.distance = (a.pos - lp.pos).Len()/100.f;
+                    cached.push_back(a);
+                }
+            }
+        } else {
+            // Light refresh — update distance only, no class re-walk.
+            for(auto& a : cached) a.distance = (a.pos - lp.pos).Len()/100.f;
         }
 
         {
             std::scoped_lock _(g_actorsLock);
-            g_actors = std::move(actors);
+            g_actors = cached;
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
     }
 }
 
@@ -87,7 +97,15 @@ void PerFrame(float dt, float sw, float sh){
     int t = g_tick.fetch_add(1);
 
     cf::feat::TickSpeed(lp, t);
-    cf::feat::Tick     (lp, snap, dt);
+
+    // Route mode: if TeleportChain / Bulk, the route planner drives the
+    // player; the cannon pipeline is skipped. Overlay HUD gets both.
+    auto mode = cf::feat::g_routeCfg.mode.load();
+    if(mode == cf::feat::RouteMode::CannonArc){
+        cf::feat::Tick(lp, snap, dt);
+    } else {
+        cf::feat::TickRoute(lp, snap, dt);
+    }
 
     auto dl = cf::feat::BuildDrawList(lp, snap, sw, sh);
     cf::ov::PublishDrawList(std::move(dl));
@@ -106,7 +124,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
 
     auto ac = cf::ab::DetectAnticheat();
     if(ac != cf::ab::AcKind::None){
-        CF_WARN("ac detected (%d) — attach held until overlay override",(int)ac);
+        CF_WARN("ac detected (%d) — heartbeat spoof engaging",(int)ac);
+        cf::ab::InstallHeartbeat();
     }
 
     // Image-hash of the target executable, FILL per build. The caller
@@ -123,6 +142,18 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
         CF_ERR("attach failed — target not running or hash mismatch");
         return 2;
     }
+
+    // Try to open the kernel driver; if \\.\CfRead answers, arm it with
+    // the target image hash and route every memory op through MmCopyVM.
+    // If it fails (driver not loaded), user-mode path stays live.
+    if(cf::kmem::Open()){
+        uint64_t targetHashNum = std::wcstoull(targetHash, nullptr, 16);
+        if(cf::kmem::Arm(targetHashNum)){
+            cf::mem::UseKernel(true);
+            CF_INFO("kernel read path online");
+        }
+    }
+
     if(!cf::sdk::ResolveGlobals()){
         CF_ERR("engine globals unresolved — check offsets.h");
         cf::mem::Detach();
@@ -139,7 +170,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     g_run.store(false);
     if(worker.joinable()) worker.join();
 
+    cf::ab::StopHeartbeat();
+    cf::kmem::Close();
     cf::mem::Detach();
-    CF_INFO("cf :: shutdown rc=%d", rc);
+    cf::spoof::RestoreReal();
+    CF_INFO("cf :: shutdown rc=%d opened=%u", rc, cf::feat::Looted());
     return rc;
 }

@@ -6,20 +6,35 @@ your own machines against a private offline build of the engine.
 
 ## Scope
 
-- **External memory loop** against an Unreal Engine 5 process image.
-- **Cannon → chest** routing: enumerates `BuildingContainer`, `AthenaSupplyDrop`,
-  `AthenaLootChest` actors in the UWorld, finds the nearest `Pirate_Cannon`
-  pawn/vehicle, computes a ballistic arc, punches the driver seat forward
-  and primes fire at the right tick.
-- **Max-speed traversal**: writes `CharacterMovement->MaxWalkSpeed`,
-  `MaxFlySpeed`, `MaxAcceleration`, `AirControl`, `GravityScale` with
-  snapback tick protection.
+- **Three collection modes**, selectable at runtime from the overlay:
+  - *Teleport Chain (default, fast)* — greedy nearest-neighbour TSP over
+    every reachable chest, teleport-hops the player with anti-warp clamp,
+    bulk-opens every chest inside a sphere at each landing.
+  - *Bulk Sweep* — same hopping, wider sphere, zero prioritisation.
+  - *Cannon Arc (legacy, slow)* — rides a `Pirate_Cannon`, solves ballistic
+    arc, one chest per shot.
+- **Kernel memory read path** (`driver/kread.c`): opens `\\.\CfRead`,
+  arms with the target image-hash, routes every read/write through
+  `MmCopyVirtualMemory`. No user-mode NtReadVirtualMemory origin in
+  the target's syscall trace. Falls back to user-mode if the driver is
+  not loaded.
+- **Max-speed traversal**: pulsed writes to `CharacterMovement` every
+  tick, defaults cranked to ~10× stock, snapback-resistant.
 - **ESP overlay**: DirectX 11 shared surface via a transparent layered
   window, no DWM hook. ImGui menu, hotkey rebind.
-- **Antiban string/behavior layer**: no module name on disk, PEB walks
-  by hash, no `OpenProcess` on the live process (handle duplication
-  through `NtQuerySystemInformation`), velocity clamping so written
-  speed stays inside Riot/EAC heuristic bounds per tick.
+- **Antiban stack**:
+  - PEB/import hashing, no module name on disk.
+  - Handle duplication attach (`NtQuerySystemInformation` + `NtDuplicateObject`),
+    no `OpenProcess` on the live process.
+  - **AC heartbeat spoofer** — pins `easyanticheat_x64` / `beclient_x64`
+    `.text` to its pristine snapshot, rewrites drift between each AC
+    heartbeat (120–376ms jitter), seeds decoy handles so the handle-table
+    snapshot matches a clean session.
+  - **Jittered chest-open rate** — inter-arrival between 90–160ms with
+    cryptographic jitter so the heuristic trigger "stddev under 10ms
+    over 500ms" never fires.
+  - Teleport delta capped to 96% of the anti-warp ceiling (never equal
+    to the ceiling, never three ticks in a row).
 - **HWID spoofer**: user-mode randomizer for volatile IDs and a kernel
   driver stub (`driver/spoof.c`) that rewrites `SMBIOS` table views,
   `DISK_GEOMETRY_EX` serials, and MAC via NDIS filter. Signed-driver

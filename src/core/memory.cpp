@@ -1,4 +1,5 @@
 #include "core/memory.h"
+#include "core/kmem.h"
 #include "antiban/hash.h"
 
 #include <windows.h>
@@ -33,6 +34,7 @@ struct State {
     HANDLE   hProc{};
     uint32_t pid{};
     uintptr_t base{};
+    std::atomic<bool> useKernel{false};
     std::mutex lock;
 } g;
 
@@ -188,22 +190,34 @@ uintptr_t ModuleBase(uint64_t nameHash){
 }
 
 bool Read(uintptr_t addr, void* out, size_t n){
+    if(g.useKernel.load() && cf::kmem::Online())
+        return cf::kmem::Read(addr, out, n);
     if(!g.hProc) return false;
     SIZE_T r=0;
     return g_nt.ReadVirtualMemory(g.hProc,(PVOID)addr,out,n,&r)==0 && r==n;
 }
 
 bool Write(uintptr_t addr, const void* in, size_t n){
+    if(g.useKernel.load() && cf::kmem::Online())
+        return cf::kmem::Write(addr, in, n);
     if(!g.hProc) return false;
     SIZE_T w=0;
     return g_nt.WriteVirtualMemory(g.hProc,(PVOID)addr,(PVOID)in,n,&w)==0 && w==n;
 }
 
 bool Scatter(ScatterRange* r, size_t count){
+    if(g.useKernel.load() && cf::kmem::Online()){
+        std::vector<cf::kmem::Req> reqs(count);
+        for(size_t i=0;i<count;++i) reqs[i] = {r[i].src, r[i].dst, r[i].size};
+        return cf::kmem::Batch(reqs.data(), reqs.size());
+    }
     bool ok=true;
     for(size_t i=0;i<count;++i) ok &= Read(r[i].src, r[i].dst, r[i].size);
     return ok;
 }
+
+void UseKernel(bool on){ g.useKernel.store(on); }
+bool KernelActive(){ return g.useKernel.load() && cf::kmem::Online(); }
 
 uintptr_t Pattern(uintptr_t modBase, size_t modSize,
                   const char* pattern, const char* mask){

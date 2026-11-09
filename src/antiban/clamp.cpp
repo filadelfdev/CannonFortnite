@@ -7,8 +7,11 @@ FVector teleport(const FVector& from, const FVector& to, float maxDelta_cm){
     FVector d = to - from;
     float   l = d.Len();
     if(l <= maxDelta_cm) return to;
+    // Biased short of the cap by 4% — Fortnite's anti-warp fires on
+    // equal-to-max deltas across three consecutive ticks because a legit
+    // movement burst always undershoots the ceiling by physics noise.
     FVector n = d.Norm();
-    return from + n * maxDelta_cm;
+    return from + n * (maxDelta_cm * 0.96f);
 }
 
 float speedCap(float desired, float serverCap){
@@ -18,9 +21,15 @@ float speedCap(float desired, float serverCap){
 }
 
 bool chestOpenRateOk(double now, double lastOpen){
-    // ~3 chests per second ceiling. A real player at a loot pile hits 2-3/s;
-    // 4+/s is the heuristic trigger.
-    return (now - lastOpen) >= 0.33;
+    // Jitter the gate between 90ms and 160ms. A real player at a rare-chest
+    // pile hits 6-10/s, so sitting at 7/s average with jitter lives in the
+    // same distribution a real sweat does, not a clean monotonic flood.
+    // The heuristic trigger is "N opens with inter-arrival stddev under 10ms
+    // over a 500ms window" — jitter here kills that signature.
+    static thread_local uint32_t s = 0x9E3779B9u;
+    s = s*1664525u + 1013904223u;
+    double gate = 0.090 + ((s & 0xFFFF)/65535.0) * 0.070;
+    return (now - lastOpen) >= gate;
 }
 
 } // namespace cf::ab::clamp

@@ -5,6 +5,7 @@
 
 #include <unordered_map>
 #include <mutex>
+#include <vector>
 #include <cmath>
 
 namespace cf::sdk {
