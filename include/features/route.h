@@ -5,24 +5,29 @@
 
 namespace cf::feat {
 
-// Route planner for the chest-collector. Two modes:
-//   CannonArc   — legacy: ride cannon, arc one chest at a time.
-//   TeleportChain — build a greedy TSP over every reachable chest in
-//                   range, teleport along the chain, bulk-open at each
-//                   stop. This is the fast path; collects dozens of
-//                   chests in the time the cannon opens three.
-enum class RouteMode { CannonArc, TeleportChain, Bulk };
+// Route planner for the Pirate Token farm.
+//   CannonSmash  — DEFAULT. Teleport the cannon above each chest in
+//                  turn and smash straight down. Each smash credits
+//                  one cannon-damage break, which is what drops the
+//                  Pirate Token. This is the mechanic from the ref
+//                  video; do not swap it out.
+//   TeleportChain— player-teleport loot run. Opens chests but does NOT
+//                  award the token (chest search path, not cannon
+//                  damage path). Use only for gear.
+//   Bulk         — same as TeleportChain but wider sphere; still no
+//                  token. Debug mode.
+enum class RouteMode { CannonSmash, TeleportChain, Bulk };
 
 struct RouteCfg {
-    std::atomic<RouteMode> mode{RouteMode::TeleportChain};
-    std::atomic<float> hopDelta_cm{3100.f};      // per-tick teleport cap (under warp)
-    std::atomic<float> hopCadence_ms{40.f};      // ms between hops
-    std::atomic<float> chainRange_m{1800.f};     // route planning horizon
-    std::atomic<bool>  bulkOpenOnArrive{true};   // open every chest in 500cm sphere on hop land
-    std::atomic<float> bulkRadius_cm{900.f};     // sphere radius
-    std::atomic<int>   maxOpensPerTick{4};       // clamp.cpp also gates this; soft cap here
+    std::atomic<RouteMode> mode{RouteMode::CannonSmash};   // Pirate Token mechanic
+    std::atomic<float> hopDelta_cm{3100.f};
+    std::atomic<float> hopCadence_ms{40.f};
+    std::atomic<float> chainRange_m{2500.f};
+    std::atomic<bool>  bulkOpenOnArrive{true};
+    std::atomic<float> bulkRadius_cm{900.f};
+    std::atomic<int>   maxOpensPerTick{4};
     std::atomic<bool>  rotateToTarget{true};
-    std::atomic<bool>  preferUnopenedTier{true}; // weight rare chests higher
+    std::atomic<bool>  preferUnopenedTier{true};
 };
 extern RouteCfg g_routeCfg;
 

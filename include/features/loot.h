@@ -7,12 +7,15 @@ namespace cf::feat {
 
 struct LootCfg {
     std::atomic<bool>  enabled{true};
-    std::atomic<bool>  chestMagnet{true};        // pull chests TO the player
-    std::atomic<bool>  pickupMagnet{true};       // pull floor loot to the player
-    std::atomic<bool>  wallIgnore{true};         // no LOS check
-    std::atomic<float> magnetRadius_m{80.f};     // pull radius
-    std::atomic<float> magnetSpeed_cm{450.f};    // per-tick step per item
-    std::atomic<bool>  instantPickup{true};      // write PickupTarget directly
+    // Chest magnet DISABLED by default — moving chests breaks the
+    // cannon-smash alignment and prevents the Pirate Token drop.
+    // Only enable this when running TeleportChain (non-token mode).
+    std::atomic<bool>  chestMagnet{false};
+    std::atomic<bool>  pickupMagnet{true};        // post-smash floor loot sweep
+    std::atomic<bool>  wallIgnore{true};
+    std::atomic<float> magnetRadius_m{80.f};
+    std::atomic<float> magnetSpeed_cm{450.f};
+    std::atomic<bool>  instantPickup{true};
     std::atomic<int>   maxPullsPerTick{6};
     std::atomic<bool>  autoLootDroppedWeapons{true};
     std::atomic<bool>  prioritiseMythic{true};

@@ -224,11 +224,17 @@ bool TabButton(const char* label, Tab self){
 
 void PageRoute(){
     int mode = (int)cf::feat::g_routeCfg.mode.load();
-    const char* modes[] = { "cannon arc", "teleport chain", "bulk sweep" };
+    const char* modes[] = { "cannon smash (pirate token)", "teleport chain (gear)", "bulk sweep (gear)" };
     RowBegin("mode");
     ImGui::SetNextItemWidth(-1);
     if(ImGui::Combo("##mode", &mode, modes, 3))
         cf::feat::g_routeCfg.mode.store((cf::feat::RouteMode)mode);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("cannon smash teleports the CANNON above each chest and fires straight down. "
+                       "the cannonball-breaks-chest path is what drops the Pirate Token. "
+                       "other modes open chests but do NOT award the token.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 6));
 
     RowSliderF("hop size",   cf::feat::g_routeCfg.hopDelta_cm,   500.f, 3500.f, "%.0f cm");
     RowSliderF("cadence",    cf::feat::g_routeCfg.hopCadence_ms, 10.f,  300.f,  "%.0f ms");
@@ -282,15 +288,18 @@ void PageMats(){
 }
 
 void PageCannon(){
-    RowToggle ("enabled",       cf::feat::g_cfg.enabled);
-    RowToggle ("tp into cannon",cf::feat::g_cfg.teleportIntoCannon);
-    RowToggle ("auto fire",     cf::feat::g_cfg.autoFire);
-    RowToggle ("open on touch", cf::feat::g_cfg.openOnTouch);
-    RowToggle ("skip looted",   cf::feat::g_cfg.skipLootedChests);
-    RowSliderF("range",         cf::feat::g_cfg.maxRange_m,          100.f, 2500.f, "%.0f m");
-    RowSliderF("muzzle",        cf::feat::g_cfg.cannonMuzzleSpeed,   1500.f,9000.f, "%.0f");
-    RowSliderF("cooldown",      cf::feat::g_cfg.cooldownSec,         0.1f,  3.f,    "%.2f s");
-    RowSliderI("chests / burst",cf::feat::g_cfg.chestsPerBurst,      1, 10);
+    RowToggle ("enabled",         cf::feat::g_cfg.enabled);
+    RowToggle ("teleport cannon", cf::feat::g_cfg.teleportCannon);
+    RowToggle ("player rides",    cf::feat::g_cfg.playerRidesCannon);
+    RowToggle ("auto fire",       cf::feat::g_cfg.autoFire);
+    RowToggle ("flag on smash",   cf::feat::g_cfg.openOnTouch);
+    RowToggle ("skip looted",     cf::feat::g_cfg.skipLootedChests);
+    RowSliderF("range",           cf::feat::g_cfg.maxRange_m,       100.f, 3000.f, "%.0f m");
+    RowSliderF("hover height",    cf::feat::g_cfg.hoverHeight_cm,   200.f, 1200.f, "%.0f cm");
+    RowSliderF("muzzle (smash)",  cf::feat::g_cfg.smashMuzzleSpeed, 500.f, 6000.f, "%.0f");
+    RowSliderF("aim pitch",       cf::feat::g_cfg.aimPitchDeg,      -90.f, -45.f,  "%.1f deg");
+    RowSliderF("cooldown",        cf::feat::g_cfg.cooldownSec,      0.05f, 2.f,    "%.2f s");
+    RowSliderI("session limit",   cf::feat::g_cfg.chestsPerSession, 0, 200);
 }
 
 void PageSpeed(){

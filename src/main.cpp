@@ -104,9 +104,11 @@ void PerFrame(float dt, float sw, float sh){
     cf::feat::TickAim  (lp, snap, dt);
 
     auto mode = cf::feat::g_routeCfg.mode.load();
-    if(mode == cf::feat::RouteMode::CannonArc){
+    if(mode == cf::feat::RouteMode::CannonSmash){
+        // Primary path — teleport cannon above each chest, smash, token.
         cf::feat::Tick(lp, snap, dt);
     } else {
+        // Secondary paths — player teleport, gear only, no token.
         cf::feat::TickRoute(lp, snap, dt);
     }
 
