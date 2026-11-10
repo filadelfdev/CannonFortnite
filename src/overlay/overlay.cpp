@@ -407,6 +407,34 @@ void PageSecurity(){
     }
     ImGui::SameLine();
     if(ImGui::Button("panic exit"))    g_quit = true;
+
+    // ---- Hotkey rebind ----
+    ImGui::Dummy(ImVec2(0, 10));
+    ImGui::Separator();
+    ImGui::TextUnformatted("hotkeys  (click → press any key to rebind)");
+    ImGui::Dummy(ImVec2(0, 4));
+
+    struct Binding { const char* name; std::atomic<int>& slot; int id; };
+    Binding binds[] = {
+        {"menu",   g_ovCfg.menuKey,         1},
+        {"panic",  g_ovCfg.panicKey,        2},
+        {"cannon", g_ovCfg.toggleCannonKey, 3},
+        {"speed",  g_ovCfg.toggleSpeedKey,  4},
+        {"esp",    g_ovCfg.toggleEspKey,    5},
+    };
+    int active = g_ovCfg.rebindTarget.load();
+    for(auto& b : binds){
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextUnformatted(b.name);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(110);
+        char lbl[64];
+        if(active == b.id) std::snprintf(lbl, 64, "press any key... ##%d", b.id);
+        else               std::snprintf(lbl, 64, "%s ##%d", VkName(b.slot.load()), b.id);
+        if(ImGui::Button(lbl, ImVec2(-1, 0))){
+            g_ovCfg.rebindTarget.store(b.id);
+        }
+    }
 }
 
 void PageAbout(){
@@ -562,6 +590,53 @@ bool TogglePress(int vk, bool& edge){
     return rose;
 }
 
+// Scan every possible VK; if a rebind is pending, capture the first
+// keydown and assign it to the matching slot. Modifier-only keys and
+// the left mouse button are excluded so a click doesn't rebind.
+int CaptureNextKey(){
+    for(int vk = 0x01; vk <= 0xFE; ++vk){
+        if(vk == VK_LBUTTON) continue;
+        if(GetAsyncKeyState(vk) & 0x8000) return vk;
+    }
+    return 0;
+}
+
+const char* VkName(int vk){
+    static char buf[32];
+    switch(vk){
+        case 0x05: return "Mouse4 (side)";
+        case 0x06: return "Mouse5 (side)";
+        case 0x14: return "Caps Lock";
+        case 0xA0: return "Left Shift";
+        case 0xA1: return "Right Shift";
+        case 0xA2: return "Left Ctrl";
+        case 0xA3: return "Right Ctrl";
+        case 0xA4: return "Left Alt";
+        case 0xA5: return "Right Alt";
+        case VK_SPACE:   return "Space";
+        case VK_RETURN:  return "Enter";
+        case VK_TAB:     return "Tab";
+        case VK_ESCAPE:  return "Esc";
+        case VK_BACK:    return "Backspace";
+        case VK_OEM_3:   return "` (grave)";
+        case VK_OEM_MINUS: return "-";
+        case VK_OEM_PLUS:  return "=";
+        case VK_OEM_4: return "[";
+        case VK_OEM_6: return "]";
+        case VK_OEM_5: return "\\";
+        case VK_OEM_1: return ";";
+        case VK_OEM_7: return "'";
+        case VK_OEM_COMMA: return ",";
+        case VK_OEM_PERIOD: return ".";
+        case VK_OEM_2: return "/";
+    }
+    if(vk >= '0' && vk <= '9'){ std::snprintf(buf, 32, "%c", vk); return buf; }
+    if(vk >= 'A' && vk <= 'Z'){ std::snprintf(buf, 32, "%c", vk); return buf; }
+    if(vk >= VK_F1 && vk <= VK_F24){ std::snprintf(buf, 32, "F%d", vk - VK_F1 + 1); return buf; }
+    std::snprintf(buf, 32, "VK 0x%02X", vk);
+    return buf;
+}
+
 } // namespace
 
 void PublishDrawList(std::vector<cf::feat::DrawItem> items){
@@ -590,14 +665,35 @@ int Run(TickFn perFrame){
             TranslateMessage(&msg); DispatchMessageW(&msg);
             if(msg.message==WM_QUIT) g_quit=true;
         }
-        if(TogglePress(g_ovCfg.menuKey.load(),  em)) g_ovCfg.showMenu.store(!g_ovCfg.showMenu.load());
-        if(TogglePress(g_ovCfg.panicKey.load(), ep)) g_quit=true;
-        if(TogglePress(g_ovCfg.toggleCannonKey.load(), ec))
-            cf::feat::g_cfg.enabled.store(!cf::feat::g_cfg.enabled.load());
-        if(TogglePress(g_ovCfg.toggleSpeedKey.load(),  es))
-            cf::feat::g_speedCfg.enabled.store(!cf::feat::g_speedCfg.enabled.load());
-        if(TogglePress(g_ovCfg.toggleEspKey.load(),    eesp))
-            cf::feat::g_espCfg.enabled.store(!cf::feat::g_espCfg.enabled.load());
+        // Rebind listen path — overrides normal hotkey handling while
+        // the user is choosing a key. First key down after the "rebind"
+        // button is captured, stored, and the target field cleared.
+        int rebind = g_ovCfg.rebindTarget.load();
+        if(rebind != 0){
+            int k = CaptureNextKey();
+            if(k != 0 && k != VK_LBUTTON){
+                switch(rebind){
+                    case 1: g_ovCfg.menuKey.store(k); break;
+                    case 2: g_ovCfg.panicKey.store(k); break;
+                    case 3: g_ovCfg.toggleCannonKey.store(k); break;
+                    case 4: g_ovCfg.toggleSpeedKey.store(k); break;
+                    case 5: g_ovCfg.toggleEspKey.store(k); break;
+                }
+                g_ovCfg.rebindTarget.store(0);
+                // Flush edges so the just-pressed key doesn't instantly
+                // toggle the thing it was bound to.
+                em = es = ec = ep = eesp = true;
+            }
+        } else {
+            if(TogglePress(g_ovCfg.menuKey.load(),  em)) g_ovCfg.showMenu.store(!g_ovCfg.showMenu.load());
+            if(TogglePress(g_ovCfg.panicKey.load(), ep)) g_quit=true;
+            if(TogglePress(g_ovCfg.toggleCannonKey.load(), ec))
+                cf::feat::g_cfg.enabled.store(!cf::feat::g_cfg.enabled.load());
+            if(TogglePress(g_ovCfg.toggleSpeedKey.load(),  es))
+                cf::feat::g_speedCfg.enabled.store(!cf::feat::g_speedCfg.enabled.load());
+            if(TogglePress(g_ovCfg.toggleEspKey.load(),    eesp))
+                cf::feat::g_espCfg.enabled.store(!cf::feat::g_espCfg.enabled.load());
+        }
 
         auto now = std::chrono::steady_clock::now();
         float dt = std::chrono::duration<float>(now - last).count();

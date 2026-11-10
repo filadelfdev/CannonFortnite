@@ -8,11 +8,18 @@ namespace cf::ov {
 
 struct OverlayCfg {
     std::atomic<bool> showMenu{true};
-    std::atomic<int>  menuKey{0x2D};         // VK_INSERT
-    std::atomic<int>  panicKey{0x23};        // VK_END — kill everything
-    std::atomic<int>  toggleCannonKey{0x79}; // F10
-    std::atomic<int>  toggleSpeedKey{0x78};  // F9
-    std::atomic<int>  toggleEspKey{0x7A};    // F11
+    // Defaults picked for 60% keyboards (Akko Fun 60 Pro etc) — no
+    // F-row / INSERT / END physical keys. Every one of these fires
+    // without Fn held. Rebind UI lives on the Security page.
+    std::atomic<int>  menuKey{0xA5};         // VK_RMENU       (Right Alt)
+    std::atomic<int>  panicKey{0x14};        // VK_CAPITAL     (Caps Lock)
+    std::atomic<int>  toggleCannonKey{0x05}; // VK_XBUTTON1    (mouse side 1)
+    std::atomic<int>  toggleSpeedKey{0x06};  // VK_XBUTTON2    (mouse side 2)
+    std::atomic<int>  toggleEspKey{0xA3};    // VK_RCONTROL    (Right Ctrl)
+
+    // Rebind state — the overlay sets this to the id of the key being
+    // rebound, the input loop watches for the next keydown and stores it.
+    std::atomic<int>  rebindTarget{0};       // 0=none, 1..5 = one of the five
 };
 extern OverlayCfg g_ovCfg;
 
