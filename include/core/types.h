@@ -35,8 +35,9 @@ struct Actor {
     uint32_t classId{};
     std::string className;
     FVector pos{};
-    float distance{};   // to local player, m
-    bool  isChest{};
+    float distance{};
+    bool  isChest{};        // normal breakable chest (cannon-ok)
+    bool  isVaultChest{};   // Vault/Sprite chest — do NOT target
     bool  isCannon{};
     bool  isLootDrop{};
     bool  isPlayer{};

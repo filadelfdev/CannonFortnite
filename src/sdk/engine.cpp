@@ -114,18 +114,35 @@ bool EnumerateActors(std::vector<uintptr_t>& out){
 void ClassifyActor(Actor& a){
     uint64_t h = cf::ab::fnv1a_lower(a.className.c_str());
 
-    // Chapter 7 class-name hashes. Precomputed with fnv1a_lower.
-    constexpr uint64_t H_Tiered_Chest = cf::ab::fnv1a_lower("Tiered_Chest_Athena_C");
-    constexpr uint64_t H_Tiered_Ammo  = cf::ab::fnv1a_lower("Tiered_Ammo_Athena_C");
+    // Normal breakable chests — cannon-smashable, drops the token roll.
+    constexpr uint64_t H_Tiered_Chest   = cf::ab::fnv1a_lower("Tiered_Chest_Athena_C");
+    constexpr uint64_t H_Tiered_Ammo    = cf::ab::fnv1a_lower("Tiered_Ammo_Athena_C");
     constexpr uint64_t H_BuildContainer = cf::ab::fnv1a_lower("BuildingContainer_C");
-    constexpr uint64_t H_SupplyDrop   = cf::ab::fnv1a_lower("AthenaSupplyDrop_C");
-    constexpr uint64_t H_RareChest    = cf::ab::fnv1a_lower("Tiered_Chest_Rare_Athena_C");
-    constexpr uint64_t H_Cannon       = cf::ab::fnv1a_lower("Pirate_Cannon_VH_C");
-    constexpr uint64_t H_CannonAlt    = cf::ab::fnv1a_lower("Vehicle_Pirate_Cannon_C");
-    constexpr uint64_t H_FortPawn     = cf::ab::fnv1a_lower("FortPlayerPawnAthena_C");
+    constexpr uint64_t H_RareChest      = cf::ab::fnv1a_lower("Tiered_Chest_Rare_Athena_C");
+    constexpr uint64_t H_PirateChest    = cf::ab::fnv1a_lower("Tiered_Chest_Pirate_Athena_C");
 
-    a.isChest    = (h==H_Tiered_Chest || h==H_Tiered_Ammo ||
-                    h==H_BuildContainer || h==H_RareChest);
+    // Vault / Sprite chests — NEVER target. The cannon-break path no
+    // longer applies to these (Nov 2026 patch); shooting one is wasted
+    // ammo + a behaviour-classifier trigger.
+    // FILL per-patch — class names below are best-known as of Nov 2026.
+    constexpr uint64_t H_VaultChest1    = cf::ab::fnv1a_lower("Tiered_Vault_Chest_Pirate_Athena_C");
+    constexpr uint64_t H_VaultChest2    = cf::ab::fnv1a_lower("Vault_Chest_Pirate_C");
+    constexpr uint64_t H_VaultChest3    = cf::ab::fnv1a_lower("Pirate_Vault_Chest_C");
+    constexpr uint64_t H_SpriteChest    = cf::ab::fnv1a_lower("Tiered_Sprite_Chest_Athena_C");
+    constexpr uint64_t H_VaultDoor      = cf::ab::fnv1a_lower("Pirate_Vault_Door_C");
+
+    constexpr uint64_t H_SupplyDrop     = cf::ab::fnv1a_lower("AthenaSupplyDrop_C");
+    constexpr uint64_t H_Cannon         = cf::ab::fnv1a_lower("Pirate_Cannon_VH_C");
+    constexpr uint64_t H_CannonAlt      = cf::ab::fnv1a_lower("Vehicle_Pirate_Cannon_C");
+    constexpr uint64_t H_FortPawn       = cf::ab::fnv1a_lower("FortPlayerPawnAthena_C");
+
+    a.isVaultChest = (h==H_VaultChest1 || h==H_VaultChest2 ||
+                      h==H_VaultChest3 || h==H_SpriteChest ||
+                      h==H_VaultDoor);
+    a.isChest    = !a.isVaultChest &&
+                   (h==H_Tiered_Chest || h==H_Tiered_Ammo ||
+                    h==H_BuildContainer || h==H_RareChest ||
+                    h==H_PirateChest);
     a.isLootDrop = (h==H_SupplyDrop);
     a.isCannon   = (h==H_Cannon || h==H_CannonAlt);
     a.isPlayer   = (h==H_FortPawn);

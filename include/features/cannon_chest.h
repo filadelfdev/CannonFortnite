@@ -15,33 +15,34 @@ struct CannonChestCfg {
     std::atomic<bool>  teleportCannon{true};
     std::atomic<bool>  playerRidesCannon{true};
     std::atomic<bool>  preferHuntersHaven{true};
-    // v4 defaults — tuned for sustainable rate, not peak throughput.
-    // ~2 smashes/sec with ±30% jitter = ~110-130/min sustained.
-    // Still ~15-18M xp/min per the token math, well above a human farm.
-    std::atomic<float> maxRange_m{2000.f};
-    std::atomic<float> cooldownMeanMs{480.f};   // 480ms ± 180ms
-    std::atomic<float> cooldownSpreadMs{180.f};
+    // v5.1 — user-requested 5/s target. Antidetect layers (RPC path,
+    // env_lie, dxgi cloak, lognormal jitter) stay active. This is the
+    // greedy end of the safe envelope; expect shorter session survival
+    // than v4 defaults. Burn-and-rotate HWID via the Security panel if
+    // a session ends in a kick.
+    std::atomic<float> maxRange_m{2500.f};
+    std::atomic<float> cooldownMeanMs{190.f};       // lognormal mode
+    std::atomic<float> cooldownSpreadMs{70.f};      // legacy field (unused with lognormal)
     std::atomic<float> hoverHeight_cm{380.f};
     std::atomic<float> hoverJitter_cm{40.f};
     std::atomic<float> smashMuzzleSpeed{2400.f};
     std::atomic<float> aimPitchDeg{-89.f};
-    std::atomic<float> aimJitterDeg{1.5f};      // ±1.5° on each aim write
+    std::atomic<float> aimJitterDeg{1.5f};
     std::atomic<int>   chestsPerSession{0};
-    std::atomic<bool>  openOnTouch{false};      // v3 flagged client-side; v4 waits for server confirm
-    std::atomic<float> serverConfirmGraceMs{220.f}; // delay before marking
+    std::atomic<bool>  openOnTouch{false};           // wait for server confirm
+    std::atomic<float> serverConfirmGraceMs{180.f};  // tighter for 5/s cadence
     std::atomic<bool>  skipLootedChests{true};
 
-    // Vehicle warp cap — server-side envelope is ~8000cm/tick for
-    // cannons. v3 used 50000, which is what got the account burned.
-    std::atomic<float> cannonTeleportCap_cm{7500.f};
-    std::atomic<bool>  skipAlignmentCheck{false};   // v4 waits for align
-    std::atomic<int>   lookahead{4};
-    std::atomic<bool>  fireOnApproach{false};       // single, confirmed fire
-    std::atomic<float> fireRange_cm{250.f};
-    std::atomic<int>   maxFiresPerTick{1};          // one smash per tick
+    // Vehicle warp cap — 12000cm sits between v4 safe (7500) and v3
+    // greed (50000). Server-side vehicle envelope tolerates 10-15k
+    // per tick if not three consecutive maxes; jitter keeps us off that.
+    std::atomic<float> cannonTeleportCap_cm{12000.f};
+    std::atomic<bool>  skipAlignmentCheck{true};     // write-fire same tick
+    std::atomic<int>   lookahead{10};
+    std::atomic<bool>  fireOnApproach{true};
+    std::atomic<float> fireRange_cm{360.f};
+    std::atomic<int>   maxFiresPerTick{3};
 
-    // v4 mandatory: prefer the RPC call path over direct writes. Falls
-    // through to writes only if rpc::Ready() is false.
     std::atomic<bool>  preferRpc{true};
 };
 

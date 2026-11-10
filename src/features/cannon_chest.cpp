@@ -145,7 +145,11 @@ void BuildQueue(const FVector& from,
     pool.reserve(64);
     float maxCm = maxRange_m * 100.f;
     for(auto& a : actors){
-        if(!(a.isChest || a.isLootDrop)) continue;
+        // ONLY normal breakable chests. Vault/Sprite chests go through
+        // the key-use path (not this pipeline) — never target them with
+        // a cannon-smash, they won't break and the attempts flag.
+        if(a.isVaultChest) continue;
+        if(!a.isChest && !a.isLootDrop) continue;
         if(g_cfg.skipLootedChests.load() && IsChestLooted(a.addr)) continue;
         float d = (a.pos - from).Len();
         if(d > maxCm) continue;
@@ -233,60 +237,69 @@ void Tick(const LocalPlayerCache& lp,
 
     if(p.prequeue.empty()){ p.targetChest = 0; return; }
 
-    // v5: lognormal inter-arrival — a human's chest-open cadence follows
-    // lognormal(mode=cooldownMs, sigma=0.45). Spreading uniform noise
-    // keeps stddev up but EAC's classifier sniffs the kurtosis — lognormal
-    // matches both moments.
+    // v5.1: lognormal gate at 190ms mode. Supports multi-fire per tick
+    // (up to maxFiresPerTick) when a cluster of chests sits inside
+    // fireRange. Each fire still passes through the gate so inter-
+    // arrival stays lognormal, not a clean burst.
     double now = NowSec();
-    const double sigma = 0.45;
-    if(!cf::ab::jitter::shouldFireLognormal(now, p.lastFireTime,
-                                            g_cfg.cooldownMeanMs.load(),
-                                            sigma)){
-        // Still move toward the next chest even if we can't fire yet —
-        // the actual fire RPC is cheap and gated, the move is the slow
-        // part. One move write per tick is below the vehicle envelope.
+    const double sigma = 0.30;   // tighter curve at higher rate
+    int firesThisTick = 0;
+    int cap = g_cfg.maxFiresPerTick.load();
+    float fr = g_cfg.fireRange_cm.load();
+
+    while(!p.prequeue.empty() && firesThisTick < cap){
+        if(!cf::ab::jitter::shouldFireLognormal(now, p.lastFireTime,
+                                                g_cfg.cooldownMeanMs.load(),
+                                                sigma)){
+            // Not firing yet — move the cannon toward the head of queue
+            // so the next gate-open finds us already in place.
+            p.targetChest = p.prequeue.front();
+            uintptr_t chestRoot = cf::mem::R<uintptr_t>(p.targetChest + cf::off::Pawn_RootComponent);
+            if(!chestRoot){ p.prequeue.erase(p.prequeue.begin()); continue; }
+            FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
+            if(g_cfg.teleportCannon.load()) MoveCannon(lp, p.activeCannon, chestPos);
+            return;
+        }
+
         p.targetChest = p.prequeue.front();
         uintptr_t chestRoot = cf::mem::R<uintptr_t>(p.targetChest + cf::off::Pawn_RootComponent);
-        if(!chestRoot){ p.prequeue.erase(p.prequeue.begin()); return; }
+        if(!chestRoot){ p.prequeue.erase(p.prequeue.begin()); continue; }
         FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
+
         if(g_cfg.teleportCannon.load()) MoveCannon(lp, p.activeCannon, chestPos);
-        return;
-    }
 
-    // Fire path — only one chest per tick, ever (v4).
-    p.targetChest = p.prequeue.front();
-    uintptr_t chestRoot = cf::mem::R<uintptr_t>(p.targetChest + cf::off::Pawn_RootComponent);
-    if(!chestRoot){ p.prequeue.erase(p.prequeue.begin()); return; }
-    FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
+        cannonPos = cf::mem::R<FVector>(cannonRoot + cf::off::Scene_RelativeLocation);
+        if(!g_cfg.skipAlignmentCheck.load()){
+            float horiz = std::sqrt((cannonPos.x-chestPos.x)*(cannonPos.x-chestPos.x) +
+                                    (cannonPos.y-chestPos.y)*(cannonPos.y-chestPos.y));
+            float dz    = cannonPos.z - chestPos.z;
+            if(horiz > 220.f || dz < g_cfg.hoverHeight_cm.load()*0.5f) return;
+        }
 
-    if(g_cfg.teleportCannon.load()) MoveCannon(lp, p.activeCannon, chestPos);
+        // fireOnApproach: in multi-fire mode, we let the queue drain
+        // any chest still inside fireRange of the current cannon pos
+        // without a fresh move write each time.
+        if(g_cfg.fireOnApproach.load()){
+            float horiz = std::sqrt((cannonPos.x-chestPos.x)*(cannonPos.x-chestPos.x) +
+                                    (cannonPos.y-chestPos.y)*(cannonPos.y-chestPos.y));
+            if(horiz > fr && firesThisTick > 0) break;   // too far, break the burst
+        }
 
-    // Alignment check (default ON in v4 — safer).
-    cannonPos = cf::mem::R<FVector>(cannonRoot + cf::off::Scene_RelativeLocation);
-    if(!g_cfg.skipAlignmentCheck.load()){
-        float horiz = std::sqrt((cannonPos.x-chestPos.x)*(cannonPos.x-chestPos.x) +
-                                (cannonPos.y-chestPos.y)*(cannonPos.y-chestPos.y));
-        float dz    = cannonPos.z - chestPos.z;
-        if(horiz > 220.f || dz < g_cfg.hoverHeight_cm.load()*0.5f) return;
-    }
+        FireCannonAt(p.activeCannon, p.targetChest);
+        p.pending.push_back({p.targetChest, now});
+        if(g_cfg.openOnTouch.load()) FlagChestSearched(p.targetChest);
 
-    FireCannonAt(p.activeCannon, p.targetChest);
-    p.pending.push_back({p.targetChest, now});
+        p.prequeue.erase(p.prequeue.begin());
+        p.targetChest = 0;
+        ++firesThisTick;
 
-    // Do NOT flag searched yet — wait for server. Grace-window drain
-    // in ProcessPending() counts the smash only when the server
-    // confirms. Legacy behaviour (immediate flag) available via the
-    // openOnTouch toggle for debugging.
-    if(g_cfg.openOnTouch.load()){
-        FlagChestSearched(p.targetChest);
-    }
+        int lim = g_cfg.chestsPerSession.load();
+        if(lim > 0 && (int)p.smashed.load() >= lim){
+            g_cfg.enabled.store(false);
+            return;
+        }
 
-    p.prequeue.erase(p.prequeue.begin());
-    p.targetChest = 0;
-
-    int lim = g_cfg.chestsPerSession.load();
-    if(lim > 0 && (int)p.smashed.load() >= lim){
-        g_cfg.enabled.store(false);
+        now = NowSec();   // refresh for the gate on the next iteration
     }
 }
 
