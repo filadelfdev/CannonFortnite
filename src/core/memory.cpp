@@ -219,6 +219,70 @@ bool Scatter(ScatterRange* r, size_t count){
 void UseKernel(bool on){ g.useKernel.store(on); }
 bool KernelActive(){ return g.useKernel.load() && cf::kmem::Online(); }
 
+uintptr_t GetTargetPeb(){
+    if(!g.hProc) return 0;
+    PROCESS_BASIC_INFORMATION pbi{};
+    ULONG ret = 0;
+    if(g_nt.QueryInformationProcess(g.hProc, 0, &pbi, sizeof(pbi), &ret) != 0) return 0;
+    return (uintptr_t)pbi.PebBaseAddress;
+}
+
+uintptr_t GetTargetModuleBase(const wchar_t* dllName){
+    uintptr_t peb = GetTargetPeb();
+    if(!peb) return 0;
+
+    // PEB layout (x64 Windows 10/11):
+    //   +0x18 PPEB_LDR_DATA Ldr
+    // PEB_LDR_DATA:
+    //   +0x10 LIST_ENTRY InLoadOrderModuleList (Flink/Blink)
+    // LDR_DATA_TABLE_ENTRY (fields we care about):
+    //   +0x00 InLoadOrderLinks (LIST_ENTRY)
+    //   +0x30 PVOID DllBase
+    //   +0x58 UNICODE_STRING BaseDllName  (Length, MaxLen, Buffer)
+    uintptr_t ldr = R<uintptr_t>(peb + 0x18);
+    if(!ldr) return 0;
+
+    uintptr_t head = ldr + 0x10;             // address of the list head
+    uintptr_t first = R<uintptr_t>(head);    // head.Flink → first entry's InLoadOrderLinks
+    if(!first) return 0;
+
+    // Walk with a cap so a corrupt list doesn't loop forever.
+    size_t target_len = 0;
+    while(dllName[target_len]) ++target_len;
+    wchar_t lowered[260]{};
+    for(size_t i=0;i<target_len && i<259;++i){
+        wchar_t c = dllName[i];
+        lowered[i] = (c>=L'A'&&c<=L'Z') ? (wchar_t)(c+32) : c;
+    }
+
+    uintptr_t cur = first;
+    for(int i=0; i<512 && cur != head; ++i){
+        struct UniStr { uint16_t len; uint16_t max; uint32_t pad; uintptr_t buf; };
+        UniStr name = R<UniStr>(cur + 0x58);
+        if(name.len > 0 && name.len < 520 && name.buf){
+            wchar_t buf[260]{};
+            size_t copy = name.len/2;
+            if(copy > 259) copy = 259;
+            Read(name.buf, buf, copy*2);
+            // tolower compare
+            if(copy == target_len){
+                bool match = true;
+                for(size_t k=0;k<copy;++k){
+                    wchar_t c = buf[k];
+                    wchar_t l = (c>=L'A'&&c<=L'Z') ? (wchar_t)(c+32) : c;
+                    if(l != lowered[k]){ match = false; break; }
+                }
+                if(match){
+                    return R<uintptr_t>(cur + 0x30);   // DllBase
+                }
+            }
+        }
+        cur = R<uintptr_t>(cur);   // Flink
+        if(!cur) break;
+    }
+    return 0;
+}
+
 uintptr_t Pattern(uintptr_t modBase, size_t modSize,
                   const char* pattern, const char* mask){
     size_t len = strlen(mask);

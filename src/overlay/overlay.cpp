@@ -12,6 +12,7 @@
 #include "antiban/rpc_path.h"
 #include "antiban/env_lie.h"
 #include "antiban/dxgi_cloak.h"
+#include "antiban/dxgi_kernel.h"
 #include "spoofer/rotator.h"
 #include "util/log.h"
 
@@ -375,9 +376,13 @@ void PageSecurity(){
     ImGui::SameLine();
     StatusPill(cf::ab::rpc::Ready()     ? "rpc ON"         : "rpc OFF",         cf::ab::rpc::Ready());
     ImGui::Dummy(ImVec2(0, 4));
-    StatusPill(cf::ab::envlie::Armed()  ? "env-lie ON"     : "env-lie OFF",     cf::ab::envlie::Armed());
+    StatusPill(cf::ab::envlie::Armed()  ? "env-lie ON"       : "env-lie OFF",       cf::ab::envlie::Armed());
     ImGui::SameLine();
-    StatusPill(cf::ab::dxgi::Armed()    ? "dxgi cloak ON"  : "dxgi cloak OFF",  cf::ab::dxgi::Armed());
+    // dxgi cloak: kernel-side (bug #9 fix) if available, else overlay-local.
+    bool kcloak = cf::ab::dxgi_k::Armed();
+    StatusPill(kcloak ? "dxgi kernel ON" :
+               cf::ab::dxgi::Armed() ? "dxgi overlay ON" : "dxgi OFF",
+               kcloak || cf::ab::dxgi::Armed());
     ImGui::Dummy(ImVec2(0, 6));
 
     char buf[160];

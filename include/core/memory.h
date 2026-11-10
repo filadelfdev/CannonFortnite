@@ -35,6 +35,15 @@ bool Scatter(ScatterRange* r, size_t count);
 void UseKernel(bool on);
 bool KernelActive();
 
+// Target PEB — used by the DXGI kernel cloak to walk the target's
+// loader list without needing an additional driver IOCTL.
+uintptr_t GetTargetPeb();
+
+// Walk the target's Ldr list, return the base of the named module.
+// Case-insensitive match on a UTF-16 base name (e.g., L"dxgi.dll").
+// Returns 0 if not found.
+uintptr_t GetTargetModuleBase(const wchar_t* dllName);
+
 // Pattern scan over a loaded module (image copy, not the live proc).
 uintptr_t Pattern(uintptr_t modBase, size_t modSize,
                   const char* pattern, const char* mask);
