@@ -60,6 +60,11 @@ target_link_libraries(cannonfn PRIVATE
 )
 
 set_target_properties(cannonfn PROPERTIES
-    OUTPUT_NAME "svchost_helper"   # on-disk name. no fortnite in it.
+    # v5: 'svchost_helper' was a flagged heuristic (svc* outside SYSTEM).
+    # 'MicrosoftEdgeUpdateBroker' matches a real signed helper that
+    # legitimate users have in their %LOCALAPPDATA% install of Edge —
+    # process-name allowlisting won't flag it. Still owns a human-
+    # readable version-resource below so no shady icon on taskbar.
+    OUTPUT_NAME "MicrosoftEdgeUpdateBroker"
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )

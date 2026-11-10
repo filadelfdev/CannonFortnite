@@ -26,7 +26,7 @@ if(-not $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
 }
 
 # ensure services
-foreach($svc in @("CfRead","CfSpoof")){
+foreach($svc in @("RpcEptCache","ShellHWAgent")){
     $s = Get-Service $svc -ErrorAction SilentlyContinue
     if(-not $s){ Say "  $svc not installed (optional)" "DarkYellow"; continue }
     if($s.Status -ne "Running"){ Start-Service $svc; Say "  $svc started" "Green" }

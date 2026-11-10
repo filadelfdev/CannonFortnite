@@ -1,6 +1,7 @@
 #include "antiban/jitter.h"
 #include <windows.h>
 #include <bcrypt.h>
+#include <cmath>
 #include <cstring>
 
 #pragma comment(lib, "bcrypt")
@@ -65,6 +66,35 @@ bool shouldFire(double nowSec, double& lastSec, double meanMs, double spreadMs){
 
 float wobble(float v, float magnitude){
     return v + (float)(frac()*2.0 - 1.0) * magnitude;
+}
+
+double gaussian(double mean, double stddev){
+    // Box-Muller.
+    double u1 = frac(); if(u1 < 1e-9) u1 = 1e-9;
+    double u2 = frac();
+    double z  = std::sqrt(-2.0 * std::log(u1)) * std::cos(6.2831853071795864769 * u2);
+    return mean + z * stddev;
+}
+
+double lognormal(double meanLn, double sigmaLn){
+    return std::exp(gaussian(meanLn, sigmaLn));
+}
+
+double lognormalMs(double meanMs, double sigma){
+    // Convert mode to meanLn so the output peaks at `meanMs`.
+    double meanLn = std::log(meanMs) + sigma * sigma;
+    return lognormal(meanLn, sigma);
+}
+
+bool shouldFireLognormal(double nowSec, double& lastSec,
+                         double meanMs, double sigma){
+    static thread_local double currentGate = 0.0;
+    if(currentGate == 0.0) currentGate = lognormalMs(meanMs, sigma) * 0.001;
+    if((nowSec - lastSec) < currentGate) return false;
+    lastSec = nowSec;
+    // Roll a fresh gate for the next interval.
+    currentGate = lognormalMs(meanMs, sigma) * 0.001;
+    return true;
 }
 
 } // namespace cf::ab::jitter

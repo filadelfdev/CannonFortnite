@@ -15,6 +15,19 @@ int32_t irange(int32_t lo, int32_t hi);
 float   frange(float lo, float hi);
 double  gatedMs(double meanMs, double spreadMs);
 
+// v5: gaussian and lognormal distributions — human reaction times
+// and inter-arrival intervals follow these, not uniform. EAC's
+// behaviour classifier buckets deviations from both.
+double  gaussian(double mean, double stddev);
+double  lognormal(double meanLn, double sigmaLn);
+
+// Lognormal-gated inter-arrival — the realistic model for human
+// click / interact cadence. meanMs is the mode of the distribution;
+// sigma is the shape (typical 0.35-0.55 for engaged humans).
+double  lognormalMs(double meanMs, double sigma);
+bool    shouldFireLognormal(double nowSec, double& lastSec,
+                            double meanMs, double sigma);
+
 // Returns true + updates `lastSec` when enough time (mean ± spread) has
 // passed since `lastSec`. The gate's own interval is jittered every
 // call so no two gates share a cadence.

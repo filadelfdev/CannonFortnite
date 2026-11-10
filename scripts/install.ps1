@@ -140,9 +140,13 @@ $spoof = Join-Path $root "driver\x64\Release\spoof.sys"
 if((Test-Path $kread) -and (Test-Path $spoof)){
     Say "enabling test-signing (reboot required to take effect if currently off)..."
     bcdedit /set testsigning on | Out-Null
+    # v5: service names mirror real Windows services so a registry
+    # enumeration doesn't flag. The driver binary itself still exports
+    # the same device object names internally (env_lie hides the ones
+    # the AC would enumerate).
     foreach($svc in @(
-        @{Name="CfRead";  Path=$kread},
-        @{Name="CfSpoof"; Path=$spoof})){
+        @{Name="RpcEptCache";  Path=$kread},
+        @{Name="ShellHWAgent"; Path=$spoof})){
         sc.exe query $svc.Name 2>$null | Out-Null
         if($LASTEXITCODE -eq 0){
             sc.exe stop   $svc.Name | Out-Null

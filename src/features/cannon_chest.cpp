@@ -233,12 +233,15 @@ void Tick(const LocalPlayerCache& lp,
 
     if(p.prequeue.empty()){ p.targetChest = 0; return; }
 
-    // Jittered cooldown — stddev across the whole session matches the
-    // distribution of a sweat farming the rare tier, not a loop.
+    // v5: lognormal inter-arrival — a human's chest-open cadence follows
+    // lognormal(mode=cooldownMs, sigma=0.45). Spreading uniform noise
+    // keeps stddev up but EAC's classifier sniffs the kurtosis — lognormal
+    // matches both moments.
     double now = NowSec();
-    if(!cf::ab::jitter::shouldFire(now, p.lastFireTime,
-                                   g_cfg.cooldownMeanMs.load(),
-                                   g_cfg.cooldownSpreadMs.load())){
+    const double sigma = 0.45;
+    if(!cf::ab::jitter::shouldFireLognormal(now, p.lastFireTime,
+                                            g_cfg.cooldownMeanMs.load(),
+                                            sigma)){
         // Still move toward the next chest even if we can't fire yet —
         // the actual fire RPC is cheap and gated, the move is the slow
         // part. One move write per tick is below the vehicle envelope.

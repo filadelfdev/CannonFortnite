@@ -26,6 +26,8 @@
 #include "antiban/heartbeat.h"
 #include "antiban/jitter.h"
 #include "antiban/rpc_path.h"
+#include "antiban/env_lie.h"
+#include "antiban/dxgi_cloak.h"
 #include "spoofer/spoofer.h"
 #include "spoofer/rotator.h"
 #include "util/log.h"
@@ -136,6 +138,11 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     //   5. hide worker threads
     cf::ab::jitter::Seed();
     cf::ab::InstallVEH();
+    // v5: environment lies BEFORE anything else enumerates the box.
+    // test-signing bit hidden, CfRead/CfSpoof invisible to NtEnumerateKey.
+    cf::ab::envlie::InstallAll();
+    // v5: DXGI adapter identity spoofed (rotator seeds it below).
+    cf::ab::dxgi::Install();
     cf::ab::ZeroOwnHeader();
     cf::ab::HideSelfThreads();
 
@@ -150,9 +157,30 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     if(cf::spoof::rot::PickNext(ledger, fp)){
         cf::spoof::Apply(fp);
         cf::spoof::ApplyKernel(fp);
+        // v5: feed DXGI cloak a deterministic adapter identity
+        // derived from the slot so the GPU identity rotates with HWID.
+        uint32_t seed = (uint32_t)cf::ab::fnv1a(fp.machineGuid.c_str());
+        static const char* gpus[] = {
+            "NVIDIA GeForce RTX 3060", "NVIDIA GeForce RTX 3070",
+            "NVIDIA GeForce RTX 4060", "AMD Radeon RX 6700 XT",
+            "AMD Radeon RX 7600", "NVIDIA GeForce RTX 4070",
+            "Intel Arc A750"
+        };
+        static const unsigned ids[][4] = {
+            {0x10DE, 0x2504, 0x38461462, 0xA1},
+            {0x10DE, 0x2484, 0x40701462, 0xA1},
+            {0x10DE, 0x2882, 0x40601462, 0xA1},
+            {0x1002, 0x73DF, 0xC0671458, 0xC1},
+            {0x1002, 0x7480, 0x76001028, 0xC2},
+            {0x10DE, 0x2786, 0x40751462, 0xA1},
+            {0x8086, 0x56A1, 0x56A18086, 0x08},
+        };
+        int pick = (int)(seed % (sizeof(gpus)/sizeof(gpus[0])));
+        cf::ab::dxgi::SetReportedAdapter("GPU", gpus[pick],
+            ids[pick][0], ids[pick][1], ids[pick][2], ids[pick][3]);
         cf::spoof::rot::SaveLedger(ledger);
-        CF_INFO("hwid rotated: %d clean slots remain",
-                cf::spoof::rot::RemainingClean(ledger));
+        CF_INFO("hwid rotated: %d clean slots remain · gpu=%s",
+                cf::spoof::rot::RemainingClean(ledger), gpus[pick]);
     }
 
     auto ac = cf::ab::DetectAnticheat();

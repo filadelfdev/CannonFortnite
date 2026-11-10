@@ -1,5 +1,6 @@
 #include "overlay/overlay.h"
 #include "overlay/theme.h"
+#include "antiban/window_cloak.h"
 #include "features/cannon_chest.h"
 #include "features/route.h"
 #include "features/speed.h"
@@ -8,6 +9,8 @@
 #include "core/memory.h"
 #include "antiban/heartbeat.h"
 #include "antiban/rpc_path.h"
+#include "antiban/env_lie.h"
+#include "antiban/dxgi_cloak.h"
 #include "spoofer/rotator.h"
 #include "util/log.h"
 
@@ -104,15 +107,15 @@ bool CreateWindow_(){
     wc.style         = CS_HREDRAW|CS_VREDRAW;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"svcSurface";
+    wc.lpszClassName = cf::ab::wincloak::BuildClassName();
     RegisterClassExW(&wc);
 
     RECT r{0,0,(LONG)GetSystemMetrics(SM_CXSCREEN),(LONG)GetSystemMetrics(SM_CYSCREEN)};
     g_w = r.right; g_h = r.bottom;
 
     g_hwnd = CreateWindowExW(
-        WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE,
-        wc.lpszClassName, L"", WS_POPUP,
+        cf::ab::wincloak::BuildExFlags(),
+        wc.lpszClassName, L"", cf::ab::wincloak::BuildStyleFlags(),
         r.left, r.top, g_w, g_h,
         nullptr, nullptr, wc.hInstance, nullptr);
 
@@ -122,6 +125,9 @@ bool CreateWindow_(){
     DwmExtendFrameIntoClientArea(g_hwnd, &m);
     ShowWindow(g_hwnd, SW_SHOW);
     UpdateWindow(g_hwnd);
+    // Late-flip TOPMOST + exclude from capture so the WM_CREATE snapshot
+    // of our flags looks benign.
+    cf::ab::wincloak::Harden(g_hwnd);
     return true;
 }
 
@@ -344,6 +350,10 @@ void PageSecurity(){
     StatusPill(cf::ab::HeartbeatArmed() ? "heartbeat ON"   : "heartbeat OFF",   cf::ab::HeartbeatArmed());
     ImGui::SameLine();
     StatusPill(cf::ab::rpc::Ready()     ? "rpc ON"         : "rpc OFF",         cf::ab::rpc::Ready());
+    ImGui::Dummy(ImVec2(0, 4));
+    StatusPill(cf::ab::envlie::Armed()  ? "env-lie ON"     : "env-lie OFF",     cf::ab::envlie::Armed());
+    ImGui::SameLine();
+    StatusPill(cf::ab::dxgi::Armed()    ? "dxgi cloak ON"  : "dxgi cloak OFF",  cf::ab::dxgi::Armed());
     ImGui::Dummy(ImVec2(0, 6));
 
     char buf[160];
