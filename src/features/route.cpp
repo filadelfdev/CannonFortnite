@@ -66,6 +66,9 @@ void PlanRoute(const LocalPlayerCache& lp,
     std::vector<Node> pool;
     pool.reserve(actors.size());
     for(auto& a : actors){
+        // Vault/Sprite chests never go in the planner — they don't
+        // break and queueing them wastes hops.
+        if(a.isVaultChest) continue;
         if(!(a.isChest || a.isLootDrop)) continue;
         float d = (a.pos - lp.pos).Len();
         if(d > horizonCm) continue;
@@ -100,7 +103,9 @@ void TickRoute(const LocalPlayerCache& lp,
                const std::vector<Actor>& actors,
                float /*dt*/){
     if(!g_cfg.enabled.load()) return;
-    if(g_routeCfg.mode.load() == RouteMode::CannonArc) return;
+    // CannonSmash mode is handled by cannon_chest::Tick, not here. The
+    // route planner only runs for TeleportChain + Bulk (gear-only paths).
+    if(g_routeCfg.mode.load() == RouteMode::CannonSmash) return;
     if(!lp.pawn || !lp.rootComp) return;
 
     double now = NowSec();
@@ -159,6 +164,7 @@ void TickRoute(const LocalPlayerCache& lp,
             int opened = 0;
             int cap    = g_routeCfg.maxOpensPerTick.load();
             for(auto& a : actors){
+                if(a.isVaultChest) continue;
                 if(!(a.isChest || a.isLootDrop)) continue;
                 float d2 = (a.pos - clamped).Len();
                 if(d2*d2 > r2) continue;

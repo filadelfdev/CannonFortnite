@@ -31,4 +31,10 @@ bool WorldToScreen(const LocalPlayerCache& lp,
 // its UClass name (hash-matched so the SDK layer has no raw strings).
 void ClassifyActor(Actor& a);
 
+// Invalidate the per-actor class-name cache. Call this on every full
+// re-enum so a reused actor address (post-GC) isn't served the previous
+// occupant's class. The FName-string cache (keyed by stable FName index)
+// does NOT need invalidation.
+void InvalidateClassCache();
+
 } // namespace cf::sdk

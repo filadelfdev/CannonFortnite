@@ -124,12 +124,19 @@ NTSTATUS NTAPI HookedNtEvk(HANDLE k, ULONG idx, ULONG cls, PVOID buf, ULONG len,
     return s;
 }
 
-// 14-byte absolute jmp trampoline installer. Returns the tramp that
-// lets the hook call the original.
+// Absolute-jmp trampoline installer.
+//
+// FIXME: this copies the first 16 bytes of the original and assumes no
+// instruction straddles that boundary. Modern VC-compiled ntdll stubs
+// start with a 2-byte `MOV EDI, EDI` HotPatch sled or a 4-byte
+// `MOV R10, RCX; MOV EAX, imm32` syscall prolog, both of which land
+// cleanly inside 16 bytes. If a target function has a longer prolog
+// instruction that crosses byte 14/15 the trampoline will execute a
+// split instruction and crash. Proper fix needs a length-disassembler
+// (Zydis/beaengine) which we don't vendor yet.
 template<typename T>
 T InstallJmp(void* target, void* hook){
     DWORD old=0; VirtualProtect(target, 16, PAGE_EXECUTE_READWRITE, &old);
-    // alloc near trampoline
     auto tramp = (BYTE*)VirtualAlloc(nullptr, 64,
                                      MEM_COMMIT|MEM_RESERVE,
                                      PAGE_EXECUTE_READWRITE);

@@ -24,29 +24,39 @@ std::unordered_map<uintptr_t, std::string> g_classCache;
 std::mutex g_cacheLock;
 
 // FName-to-string: UE5 chunked GNames, two-level pointer array of 0x4000
-// entries each, each entry a null-terminated ANSI string prefixed by
-// (hash << 16 | len).
+// entries each, each entry a header + ANSI string.
+// Reads happen WITHOUT the cache lock held — a syscall under lock
+// blocks every other sdk reader.
 std::string ReadFNameChunked(uint32_t index){
-    std::scoped_lock _(g_cacheLock);
-    auto it = g_nameCache.find(index);
-    if(it!=g_nameCache.end()) return it->second;
+    // 1. Cache hit?
+    {
+        std::scoped_lock _(g_cacheLock);
+        auto it = g_nameCache.find(index);
+        if(it != g_nameCache.end()) return it->second;
+    }
 
+    // 2. Cold read — outside the lock.
     const uint32_t chunk    = index >> 16;
-    const uint32_t offset   = (index & 0xFFFF) << 1;   // 2-byte stride
-    uintptr_t chunkPtrAddr  = g.gNames + 0x10 + chunk*8;
+    const uint32_t offset   = (index & 0xFFFF) << 1;
+    uintptr_t chunkPtrAddr  = g.gNames + 0x10 + (uintptr_t)chunk * 8;
     uintptr_t chunkBase     = cf::mem::R<uintptr_t>(chunkPtrAddr);
-    if(!chunkBase){ g_nameCache[index]={}; return {}; }
-    uintptr_t entryAddr     = chunkBase + offset;
+    std::string out;
+    if(chunkBase){
+        uintptr_t entryAddr = chunkBase + offset;
+        uint16_t header = cf::mem::R<uint16_t>(entryAddr);
+        uint16_t len    = header >> 6;
+        if(len > 0 && len <= 256){
+            char buf[257]{};
+            cf::mem::Read(entryAddr + 2, buf, len);
+            buf[len] = 0;
+            out.assign(buf, len);
+        }
+    }
 
-    uint16_t header = cf::mem::R<uint16_t>(entryAddr);
-    uint16_t len    = header >> 6;
-    if(len==0 || len>256){ g_nameCache[index]={}; return {}; }
-
-    char buf[256]{};
-    cf::mem::Read(entryAddr + 2, buf, len);
-    std::string s(buf, len);
-    g_nameCache[index] = s;
-    return s;
+    // 3. Store — even empty entries so we don't re-syscall every tick.
+    std::scoped_lock _(g_cacheLock);
+    g_nameCache[index] = out;
+    return out;
 }
 
 } // namespace
@@ -69,6 +79,9 @@ std::string FNameToString(uint32_t fnameIndex){
 
 std::string ActorClassName(uintptr_t actor){
     if(!actor) return {};
+    // Note: the UAF guard here is InvalidateClassCache() being called on
+    // every full re-enum — if an actor address gets GC'd and reused we
+    // flush the cache before new addresses can collide.
     {
         std::scoped_lock _(g_cacheLock);
         auto it = g_classCache.find(actor);
@@ -81,6 +94,11 @@ std::string ActorClassName(uintptr_t actor){
     std::scoped_lock _(g_cacheLock);
     g_classCache[actor] = n;
     return n;
+}
+
+void InvalidateClassCache(){
+    std::scoped_lock _(g_cacheLock);
+    g_classCache.clear();
 }
 
 bool EnumerateActors(std::vector<uintptr_t>& out){

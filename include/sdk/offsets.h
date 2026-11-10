@@ -104,10 +104,10 @@ namespace cf::off {
     constexpr uint32_t Weapon_FireCooldown       = 0x7C0;
 
     // --- material item defs (BP paths — resolved by fname hash) ---
-    // Wood=BuildingItemData_Wood, Brick=Stone, Metal=Metal.
-    constexpr uint32_t Material_Wood_ItemDef_FnameHash  = 0xA1B3D522;
-    constexpr uint32_t Material_Brick_ItemDef_FnameHash = 0x3C5F8A14;
-    constexpr uint32_t Material_Metal_ItemDef_FnameHash = 0x7E29C44B;
+    // Computed at startup via cf::sdk::MaterialHashWood() etc so they
+    // stay in sync with the fnv1a_lower return type (uint64_t). Previous
+    // revisions declared these as uint32_t constants which silently
+    // mismatched the hash width and killed the mats-flood compare.
 
     // --- bone indices on FortPlayerPawn mesh ---
     constexpr int Bone_Head   = 66;

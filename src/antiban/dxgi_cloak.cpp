@@ -99,8 +99,25 @@ void SetReportedAdapter(const char* vendor, const char* device,
 void Install(){
     if(g_armed.exchange(true)) return;
 
+    // IMPORTANT caveat: this patches the vtable of OUR process's adapter
+    // objects. The game process (Fortnite) creates its own factory and
+    // adapter COM objects in its own address space; those vtables are
+    // untouched by this patch — the hook only affects DXGI queries made
+    // from OUR overlay process (which the AC doesn't poll anyway).
+    //
+    // Full coverage requires one of:
+    //   - IAT hook on CreateDXGIFactory* inside the target module
+    //     (reached via the kernel driver's invoke path)
+    //   - Kernel-side DXGKRNL hook on the per-adapter descriptor shuttle
+    //
+    // Both are heavier than the scope of v5. This stub exists so later
+    // attack-surface audits don't assume the overlay's GPU identity
+    // leaks — ours doesn't after this. The game's identity still does.
     IDXGIFactory4* fac = nullptr;
-    if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&fac)))) return;
+    if(FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&fac)))){
+        g_armed.store(false);
+        return;
+    }
 
     IDXGIAdapter* a = nullptr;
     if(SUCCEEDED(fac->EnumAdapters(0, &a)) && a){
@@ -124,7 +141,7 @@ void Install(){
         a->Release();
     }
     fac->Release();
-    CF_INFO("dxgi cloak armed (GetDesc{0..3})");
+    CF_INFO("dxgi cloak armed (overlay-process vtable; game-side unhooked)");
 }
 
 void Remove(){ /* process-death only */ }

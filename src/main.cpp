@@ -66,6 +66,9 @@ void WorkerLoop(){
         // Full re-enum every 6th tick (~24ms). Faster than before so
         // freshly-spawned chests enter the queue inside one cannon
         // cooldown window at 5+/s smash rate.
+        // Class-name cache flushes every ~500 enums (~2s) so a reused
+        // actor address can't serve a stale class-name indefinitely.
+        if((frame % (6 * 500)) == 0) cf::sdk::InvalidateClassCache();
         if((frame++ % 6) == 0){
             std::vector<uintptr_t> ptrs;
             if(cf::sdk::EnumerateActors(ptrs)){

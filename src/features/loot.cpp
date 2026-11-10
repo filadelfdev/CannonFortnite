@@ -115,6 +115,15 @@ void TickLoot(const LocalPlayerCache& lp,
 
 void TickMats(const LocalPlayerCache& lp){
     if(!g_matsCfg.enabled.load() || !lp.pawn) return;
+
+    // Rate-limit — writing 999 every tick is a top-of-the-bucket flag.
+    // Only pulse once every ~900ms with jitter so the server-side delta
+    // looks like "player picked up a stack", not "client wrote stack".
+    static double lastPulse = 0.0;
+    double now = NowSec();
+    if((now - lastPulse) < 0.9) return;
+    lastPulse = now;
+
     uintptr_t inv = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_InventoryComponent);
     if(!inv) return;
 
@@ -122,7 +131,17 @@ void TickMats(const LocalPlayerCache& lp){
     TArr entries = cf::mem::R<TArr>(inv + cf::off::Inv_ReplicatedEntries);
     if(entries.num <= 0 || entries.num > 128) return;
 
-    constexpr uint32_t stride = 0x50;   // FFortItemEntry stride on current UE5 build
+    // FFortItemEntry stride — real size on current UE5 shipping build.
+    // Measured 0x58 (header: NetSerializeItem replicated struct with
+    // ItemDefinition* + Count + LoadedAmmo + Guid + reserved slack).
+    constexpr uint32_t stride = 0x58;
+
+    // Hashes computed once — fnv1a_lower returns uint64_t, the uint32_t
+    // constants in offsets.h always mismatched the width.
+    static const uint64_t H_Wood  = cf::ab::fnv1a_lower("BuildingItemData_Wood");
+    static const uint64_t H_Brick = cf::ab::fnv1a_lower("BuildingItemData_Stone");
+    static const uint64_t H_Metal = cf::ab::fnv1a_lower("BuildingItemData_Metal");
+
     const int target = g_matsCfg.targetStack.load();
     const bool topUp = g_matsCfg.topUpOnly.load();
 
@@ -132,10 +151,8 @@ void TickMats(const LocalPlayerCache& lp){
         if(!def) continue;
         uint32_t defName = cf::mem::R<uint32_t>(def + cf::off::UObject_NamePrivate);
         std::string name = cf::sdk::FNameToString(defName);
-        uint32_t h = cf::ab::fnv1a_lower(name.c_str());
-        bool isMat = (h == cf::off::Material_Wood_ItemDef_FnameHash  ||
-                      h == cf::off::Material_Brick_ItemDef_FnameHash ||
-                      h == cf::off::Material_Metal_ItemDef_FnameHash);
+        uint64_t h = cf::ab::fnv1a_lower(name.c_str());
+        bool isMat = (h == H_Wood || h == H_Brick || h == H_Metal);
         if(!isMat) continue;
         int cur = cf::mem::R<int>(entry + cf::off::ItemEntry_Count);
         if(topUp && cur >= target) continue;

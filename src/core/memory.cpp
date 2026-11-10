@@ -221,16 +221,32 @@ bool KernelActive(){ return g.useKernel.load() && cf::kmem::Online(); }
 
 uintptr_t Pattern(uintptr_t modBase, size_t modSize,
                   const char* pattern, const char* mask){
-    std::vector<BYTE> img(modSize);
-    if(!Read(modBase, img.data(), modSize)) return 0;
     size_t len = strlen(mask);
-    for(size_t i=0;i<modSize-len;++i){
-        size_t j=0;
-        for(;j<len;++j){
-            if(mask[j]=='?') continue;
-            if(img[i+j] != (BYTE)pattern[j]) break;
+    if(len == 0 || modSize < len) return 0;
+
+    // Chunked scan — Fortnite's main image is 100+ MB and a single
+    // vector<BYTE>(modSize) would allocate that in one block. Scan
+    // 2 MB at a time with a `len`-byte overlap so hits straddling a
+    // chunk boundary aren't lost.
+    constexpr size_t kChunk = 2 * 1024 * 1024;
+    std::vector<BYTE> buf(kChunk + len);
+
+    size_t pos = 0;
+    size_t end = modSize - len;
+    while(pos <= end){
+        size_t take = std::min(kChunk + len, modSize - pos);
+        if(!Read(modBase + pos, buf.data(), take)) return 0;
+        size_t scan = take >= len ? take - len : 0;
+        for(size_t i=0; i <= scan; ++i){
+            size_t j = 0;
+            for(; j < len; ++j){
+                if(mask[j] == '?') continue;
+                if(buf[i+j] != (BYTE)pattern[j]) break;
+            }
+            if(j == len) return modBase + pos + i;
         }
-        if(j==len) return modBase+i;
+        if(take < kChunk + len) break;   // last chunk was short
+        pos += kChunk;
     }
     return 0;
 }
