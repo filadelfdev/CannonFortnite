@@ -1,0 +1,114 @@
+name: build
+
+on:
+  push:
+    branches: [claude/fortnite-chest-cheat-p86dft, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write    # needed to upload release assets
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: vendor imgui
+        shell: pwsh
+        run: |
+          git clone --depth=1 --branch v1.91.0 https://github.com/ocornut/imgui third_party/imgui
+
+      - name: patch target image hash
+        shell: pwsh
+        run: |
+          $s = "FortniteClient-Win64-Shipping.exe".ToLower()
+          $h = [uint64]0xcbf29ce484222325
+          foreach($c in $s.ToCharArray()){
+              $h = $h -bxor [byte][char]$c
+              $h = ($h * 0x100000001b3) -band 0xFFFFFFFFFFFFFFFF
+          }
+          $hex = "{0:x}" -f $h
+          $main = Get-Content src/main.cpp -Raw
+          $new  = $main -replace 'const wchar_t\* targetHash = L"[0-9a-fA-F]+";',
+                                 ('const wchar_t* targetHash = L"' + $hex + '";')
+          [IO.File]::WriteAllText("src/main.cpp", $new)
+          Write-Host "patched target hash: $hex"
+
+      - name: setup msvc
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: configure (cmake)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: build (release)
+        run: cmake --build build --config Release --parallel
+
+      - name: stage artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item build\bin\Release\svchost_helper.exe dist\
+          if(Test-Path driver\x64\Release\CfRead.sys){ Copy-Item driver\x64\Release\CfRead.sys dist\ }
+          if(Test-Path driver\x64\Release\CfSpoof.sys){ Copy-Item driver\x64\Release\CfSpoof.sys dist\ }
+          Copy-Item INSTALL.bat dist\
+          Copy-Item RUN.bat     dist\
+          Copy-Item README.md   dist\
+
+      - name: pack source archive
+        shell: pwsh
+        run: |
+          $stamp = Get-Date -Format "yyyyMMdd-HHmm"
+          $name  = "cannonfortnite-src-$stamp.zip"
+          $root  = Get-Location
+          Push-Location $root
+          # exclude build + third_party from the source zip; keep it <5 MB
+          $exclude = @('build','dist','.git','third_party','out','.vs')
+          $items = Get-ChildItem -Force | Where-Object { $exclude -notcontains $_.Name }
+          Compress-Archive -Path $items -DestinationPath "dist\$name" -Force
+          Pop-Location
+          Write-Host "source archive: dist\$name"
+
+      - name: upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cannonfortnite-build
+          path: dist/
+
+      - name: release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/svchost_helper.exe
+            dist/CfRead.sys
+            dist/CfSpoof.sys
+            dist/INSTALL.bat
+            dist/RUN.bat
+            dist/README.md
+            dist/cannonfortnite-src-*.zip
+          generate_release_notes: true
+
+      - name: rolling release (on push)
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rolling
+          name: "rolling build"
+          body: "Latest build from ${{ github.ref_name }} @ ${{ github.sha }}."
+          files: |
+            dist/svchost_helper.exe
+            dist/CfRead.sys
+            dist/CfSpoof.sys
+            dist/INSTALL.bat
+            dist/RUN.bat
+            dist/README.md
+            dist/cannonfortnite-src-*.zip
+          prerelease: true
