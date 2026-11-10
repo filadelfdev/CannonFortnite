@@ -1,5 +1,6 @@
 #include "overlay/overlay.h"
 #include "overlay/theme.h"
+#include "overlay/cfg_persist.h"
 #include "antiban/window_cloak.h"
 #include "features/cannon_chest.h"
 #include "features/route.h"
@@ -645,6 +646,10 @@ void PublishDrawList(std::vector<cf::feat::DrawItem> items){
 }
 
 int Run(TickFn perFrame){
+    // Load persisted hotkeys before the window exists so the first
+    // input tick sees the user's bindings, not the defaults.
+    cf::ov::persist::LoadHotkeys(g_ovCfg);
+
     if(!CreateWindow_())   return -1;
     if(!CreateDevice())    return -2;
 
@@ -683,6 +688,8 @@ int Run(TickFn perFrame){
                 // Flush edges so the just-pressed key doesn't instantly
                 // toggle the thing it was bound to.
                 em = es = ec = ep = eesp = true;
+                // Persist immediately so a crash doesn't lose the bind.
+                cf::ov::persist::SaveHotkeys(g_ovCfg);
             }
         } else {
             if(TogglePress(g_ovCfg.menuKey.load(),  em)) g_ovCfg.showMenu.store(!g_ovCfg.showMenu.load());
@@ -702,6 +709,11 @@ int Run(TickFn perFrame){
         if(perFrame) perFrame(dt, (float)g_w, (float)g_h);
         DrawFrame();
     }
+
+    // Save-on-exit covers the case where the user never crashed but
+    // the inline save after rebind was somehow skipped (defaults write
+    // on first run with no file).
+    cf::ov::persist::SaveHotkeys(g_ovCfg);
 
 #if CF_HAS_IMGUI
     ImGui_ImplDX11_Shutdown();
