@@ -296,6 +296,29 @@ void PageMats(){
 }
 
 void PageCannon(){
+    // Master Speed slider — adjusts cooldown + fires/tick + warp cap +
+    // fire range + lookahead together. 1 = safest, 10 = unsafe.
+    using namespace cf::ov::theme::col;
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+    ImGui::TextUnformatted("velocidade (1 = seguro · 10 = perigoso)");
+    ImGui::PopStyleColor();
+    int lvl = cf::feat::g_cfg.speedPreset.load();
+    ImGui::SetNextItemWidth(-1);
+    if(ImGui::SliderInt("##speed", &lvl, 1, 10)){
+        cf::feat::ApplySpeedPreset(lvl);
+    }
+    // Live rate prediction for the current level.
+    static const char* labels[10] = {
+        "~1/s  (safest)",  "~1.5/s", "~2/s (v4)",  "~2.8/s",
+        "~3.5/s",          "~4.2/s", "~5/s (v5.1)","~6.5/s",
+        "~8/s",            "~10/s (unsafe)"
+    };
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextUnformatted(labels[lvl-1]);
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0,4));
+
     RowToggle ("enabled",           cf::feat::g_cfg.enabled);
     RowToggle ("prefer rpc",        cf::feat::g_cfg.preferRpc);
     RowToggle ("teleport cannon",   cf::feat::g_cfg.teleportCannon);

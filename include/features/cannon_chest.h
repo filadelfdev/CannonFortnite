@@ -44,7 +44,16 @@ struct CannonChestCfg {
     std::atomic<int>   maxFiresPerTick{3};
 
     std::atomic<bool>  preferRpc{true};
+
+    // Master speed preset — 1 (safest, ~1/s) to 10 (unsafe, ~10/s).
+    // Writing this triggers ApplySpeedPreset() which rewrites the
+    // individual knobs below. Set to 0 to disable the preset (free tune).
+    std::atomic<int>   speedPreset{7};   // default = 5/s target
 };
+
+// Rewrites cooldownMeanMs / maxFiresPerTick / fireRange / warp cap
+// to the preset curve. Called when the user moves the Speed slider.
+void ApplySpeedPreset(int level_1_to_10);
 
 extern CannonChestCfg g_cfg;
 

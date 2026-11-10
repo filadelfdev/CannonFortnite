@@ -195,6 +195,38 @@ std::vector<ChestVisual> GetVisualState(){
 uint32_t SmashedThisSession(){ return p.smashed.load(); }
 void     ResetSmashCounter(){ p.smashed.store(0); }
 
+void ApplySpeedPreset(int level){
+    if(level < 1) level = 1;
+    if(level > 10) level = 10;
+
+    // Curve tuned so each step roughly doubles risk but only ~30%
+    // more raw rate, because the fire-on-approach + lookahead combo
+    // front-loads throughput at low cooldown.
+    struct Preset {
+        float cooldownMs;   int fires;   float warpCap;   float fireRange;   int look;
+    };
+    static const Preset table[10] = {
+        //  cooldown   fires/tick   warp cap     fire range   lookahead
+        { 900.f,       1,           4000.f,      180.f,       3   },  // 1 — safest, ~1/s
+        { 650.f,       1,           6000.f,      220.f,       4   },  // 2
+        { 480.f,       1,           7500.f,      250.f,       5   },  // 3 — v4 default
+        { 360.f,       2,           9000.f,      280.f,       6   },  // 4
+        { 280.f,       2,          10500.f,      320.f,       8   },  // 5
+        { 230.f,       2,          11500.f,      340.f,       9   },  // 6
+        { 190.f,       3,          12000.f,      360.f,      10   },  // 7 — v5.1 default, ~5/s
+        { 150.f,       3,          14000.f,      400.f,      12   },  // 8
+        { 120.f,       4,          17000.f,      450.f,      14   },  // 9
+        {  95.f,       5,          22000.f,      520.f,      16   },  // 10 — unsafe, ~10/s
+    };
+    const auto& pr = table[level-1];
+    g_cfg.cooldownMeanMs.store(pr.cooldownMs);
+    g_cfg.maxFiresPerTick.store(pr.fires);
+    g_cfg.cannonTeleportCap_cm.store(pr.warpCap);
+    g_cfg.fireRange_cm.store(pr.fireRange);
+    g_cfg.lookahead.store(pr.look);
+    g_cfg.speedPreset.store(level);
+}
+
 void Tick(const LocalPlayerCache& lp,
           const std::vector<Actor>& actors,
           float /*dt*/){
