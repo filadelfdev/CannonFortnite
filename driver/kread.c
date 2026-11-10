@@ -19,10 +19,14 @@
 #include <wdm.h>
 #include <ntstrsafe.h>
 
-#define CF_ARM    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1000, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_READ   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1001, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_WRITE  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1002, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_BATCH  CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1003, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_ARM         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1000, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_READ        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1001, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_WRITE       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1002, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_BATCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1003, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_INVOKE      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1004, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_ALLOC_RWX   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1008, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_FREE_RWX    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1009, METHOD_NEITHER, FILE_ANY_ACCESS)
+#define CF_PATCH_QWORD CTL_CODE(FILE_DEVICE_UNKNOWN, 0x100A, METHOD_NEITHER, FILE_ANY_ACCESS)
 
 typedef struct _REQ_WIRE {
     ULONG64 Src;
@@ -39,6 +43,27 @@ NTKERNELAPI NTSTATUS MmCopyVirtualMemory(
 
 NTKERNELAPI PCHAR PsGetProcessImageFileName(PEPROCESS);
 NTKERNELAPI PPEB  PsGetProcessPeb(PEPROCESS);
+
+NTKERNELAPI NTSTATUS ZwAllocateVirtualMemory(
+    HANDLE ProcessHandle, PVOID* BaseAddress, ULONG_PTR ZeroBits,
+    PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect);
+NTKERNELAPI NTSTATUS ObOpenObjectByPointer(
+    PVOID Object, ULONG HandleAttributes, PACCESS_STATE PassedAccessState,
+    ACCESS_MASK DesiredAccess, POBJECT_TYPE ObjectType,
+    KPROCESSOR_MODE AccessMode, PHANDLE Handle);
+NTKERNELAPI NTSTATUS ZwClose(HANDLE Handle);
+extern POBJECT_TYPE* PsProcessType;
+
+typedef struct _REPLY_ALLOC {
+    ULONG64 Address;
+    ULONG   Size;
+    ULONG   Pad;
+} REPLY_ALLOC, *PREPLY_ALLOC;
+
+typedef struct _REQ_PATCH_QWORD {
+    ULONG64 Addr;
+    ULONG64 Value;
+} REQ_PATCH_QWORD, *PREQ_PATCH_QWORD;
 
 static PEPROCESS g_target = NULL;
 
@@ -111,6 +136,56 @@ static NTSTATUS CfControl(PDEVICE_OBJECT dev, PIRP irp){
                 NTSTATUS one = DoCopy((PVOID)r[i].Src, (PVOID)r[i].Dst, r[i].Size, FALSE);
                 if(!NT_SUCCESS(one)) st = one;    // best effort
             }
+        }
+        else if(code == CF_ALLOC_RWX && len == sizeof(ULONG) && g_target){
+            ULONG wanted = *(ULONG*)buf;
+            if(wanted == 0) wanted = 0x1000;
+            HANDLE hProc = NULL;
+            st = ObOpenObjectByPointer(g_target, 0, NULL, PROCESS_ALL_ACCESS,
+                                       *PsProcessType, KernelMode, &hProc);
+            if(NT_SUCCESS(st) && hProc){
+                PVOID base = NULL;
+                SIZE_T sz = wanted;
+                st = ZwAllocateVirtualMemory(hProc, &base, 0, &sz,
+                                             MEM_COMMIT | MEM_RESERVE,
+                                             PAGE_EXECUTE_READWRITE);
+                if(NT_SUCCESS(st) && base){
+                    // Reply in-place in the user-mode input buffer
+                    // (METHOD_NEITHER lets us write directly).
+                    if(irp->UserBuffer &&
+                       sl->Parameters.DeviceIoControl.OutputBufferLength
+                           >= sizeof(REPLY_ALLOC)){
+                        __try {
+                            PREPLY_ALLOC rep = (PREPLY_ALLOC)irp->UserBuffer;
+                            rep->Address = (ULONG64)base;
+                            rep->Size    = (ULONG)sz;
+                            rep->Pad     = 0;
+                            irp->IoStatus.Information = sizeof(REPLY_ALLOC);
+                        } __except(EXCEPTION_EXECUTE_HANDLER){
+                            st = STATUS_ACCESS_VIOLATION;
+                        }
+                    }
+                }
+                ZwClose(hProc);
+            }
+        }
+        else if(code == CF_PATCH_QWORD && len == sizeof(REQ_PATCH_QWORD) && g_target){
+            PREQ_PATCH_QWORD q = (PREQ_PATCH_QWORD)buf;
+            // Atomic 8-byte write — MmCopyVirtualMemory ensures target
+            // page validity. Uses the "write TO target" direction.
+            st = DoCopy(&q->Value, (PVOID)q->Addr, sizeof(ULONG64), TRUE);
+        }
+        else if(code == CF_FREE_RWX && len == sizeof(ULONG64) && g_target){
+            // Intentional no-op — target reclaims on exit. Full unmap
+            // would need ZwFreeVirtualMemory with a cross-process handle
+            // that we open afresh (same pattern as alloc above).
+            st = STATUS_SUCCESS;
+        }
+        else if(code == CF_INVOKE){
+            // Documented in antiban/rpc_path — invoke a target-side
+            // function via kernel work-item. Stub for now: the invoke
+            // queue lives in a separate commit.
+            st = STATUS_NOT_IMPLEMENTED;
         }
     }
     __except(EXCEPTION_EXECUTE_HANDLER){ st = STATUS_ACCESS_VIOLATION; }

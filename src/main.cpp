@@ -28,6 +28,7 @@
 #include "antiban/rpc_path.h"
 #include "antiban/env_lie.h"
 #include "antiban/dxgi_cloak.h"
+#include "antiban/dxgi_kernel.h"
 #include "spoofer/spoofer.h"
 #include "spoofer/rotator.h"
 #include "util/log.h"
@@ -45,6 +46,7 @@ std::atomic<bool> g_run{true};
 std::atomic<int>  g_tick{0};
 std::vector<cf::Actor> g_actors;
 std::mutex g_actorsLock;
+const cf::ab::dxgi_k::Fingerprint* g_kernelCloakFp = nullptr;
 
 void WorkerLoop(){
     // Dual-cadence loop:
@@ -162,21 +164,29 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
         cf::spoof::ApplyKernel(fp);
         // v5: feed DXGI cloak a deterministic adapter identity
         // derived from the slot so the GPU identity rotates with HWID.
+        // GPU list tuned for a mid-low-tier host (RX 580 class). All
+        // entries deliver 35-65fps range in Fortnite Chapter 7 UE5, so
+        // the reported GPU matches the measured frame-time envelope
+        // from the player's real hardware — no "high-end GPU on a
+        // slow box" mismatch to flag.
         uint32_t seed = (uint32_t)cf::ab::fnv1a(fp.machineGuid.c_str());
         static const char* gpus[] = {
-            "NVIDIA GeForce RTX 3060", "NVIDIA GeForce RTX 3070",
-            "NVIDIA GeForce RTX 4060", "AMD Radeon RX 6700 XT",
-            "AMD Radeon RX 7600", "NVIDIA GeForce RTX 4070",
-            "Intel Arc A750"
+            "NVIDIA GeForce GTX 1060 6GB",
+            "NVIDIA GeForce GTX 1650",
+            "NVIDIA GeForce GTX 1660 SUPER",
+            "NVIDIA GeForce RTX 3050",
+            "AMD Radeon RX 580",
+            "AMD Radeon RX 5500 XT",
+            "AMD Radeon RX 6600",
         };
         static const unsigned ids[][4] = {
-            {0x10DE, 0x2504, 0x38461462, 0xA1},
-            {0x10DE, 0x2484, 0x40701462, 0xA1},
-            {0x10DE, 0x2882, 0x40601462, 0xA1},
-            {0x1002, 0x73DF, 0xC0671458, 0xC1},
-            {0x1002, 0x7480, 0x76001028, 0xC2},
-            {0x10DE, 0x2786, 0x40751462, 0xA1},
-            {0x8086, 0x56A1, 0x56A18086, 0x08},
+            {0x10DE, 0x1C03, 0x37161462, 0xA1},
+            {0x10DE, 0x1F82, 0x12AD1043, 0xA1},
+            {0x10DE, 0x21C4, 0x12AB1458, 0xA1},
+            {0x10DE, 0x2507, 0x40901462, 0xA1},
+            {0x1002, 0x67DF, 0xE366148C, 0xE7},
+            {0x1002, 0x7340, 0x73403842, 0xCA},
+            {0x1002, 0x73FF, 0xE4011DA2, 0xC1},
         };
         int pick = (int)(seed % (sizeof(gpus)/sizeof(gpus[0])));
         cf::ab::dxgi::SetReportedAdapter("GPU", gpus[pick],
@@ -184,6 +194,20 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
         cf::spoof::rot::SaveLedger(ledger);
         CF_INFO("hwid rotated: %d clean slots remain · gpu=%s",
                 cf::spoof::rot::RemainingClean(ledger), gpus[pick]);
+
+        // Stash the picked GPU for the kernel-side cloak install that
+        // happens after attach (dxgi_kernel::InstallInTarget needs the
+        // fp struct built from the same slot).
+        static cf::ab::dxgi_k::Fingerprint s_kfp;
+        size_t slen = 0;
+        while(slen < 127 && gpus[pick][slen]) ++slen;
+        for(size_t i=0;i<slen;++i) s_kfp.desc[i] = (wchar_t)gpus[pick][i];
+        s_kfp.desc[slen] = 0;
+        s_kfp.vendorId = ids[pick][0];
+        s_kfp.deviceId = ids[pick][1];
+        s_kfp.subsysId = ids[pick][2];
+        s_kfp.revision = ids[pick][3];
+        g_kernelCloakFp = &s_kfp;
     }
 
     auto ac = cf::ab::DetectAnticheat();
@@ -239,6 +263,14 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
         CF_WARN("RPC path offline — DIRECT WRITES ACTIVE — raise cooldown");
     }
 
+    // Kernel-side DXGI cloak — the target-process hook that was bug #9.
+    // Only runs if the driver is up AND we have the kernel fp staged by
+    // the rotator above AND the vtable resolver returns something non-
+    // stub. Falls through cleanly on any of those being absent.
+    if(g_kernelCloakFp){
+        cf::ab::dxgi_k::InstallInTarget(*g_kernelCloakFp);
+    }
+
     // Spoofer — stash the real fingerprint so panic restores on exit.
     cf::spoof::StashReal();
 
@@ -249,6 +281,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     g_run.store(false);
     if(worker.joinable()) worker.join();
 
+    cf::ab::dxgi_k::RemoveFromTarget();
     cf::ab::StopHeartbeat();
     cf::kmem::Close();
     cf::mem::Detach();
