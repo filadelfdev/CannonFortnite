@@ -25,6 +25,7 @@ struct Resolved {
     Fn cannonMove;
     Fn cannonSeat;
     Fn chestDamage;
+    Fn chestInteract;
     Fn pawnMove;
     Fn pickupGrab;
     std::atomic<bool> ready{false};
@@ -43,6 +44,11 @@ const Sig SIG_CannonSeat   = { "\x40\x53\x48\x83\xEC\x30\x48\x8B\xDA\x48\x8B\xCA
                                "xxxxxxxxxxxx", 0x10 };
 const Sig SIG_ChestDamage  = { "\x48\x89\x5C\x24\x00\x48\x89\x74\x24\x00\x57\x48\x83\xEC\x20\x41\x8B\xD8\x48\x8B\xFA",
                                "xxxx?xxxx?xxxxxxxxxxx", 0x10 };
+// ServerInteract on AFortBuildingContainer — the Nov 2026 chest
+// opening path. Called with (this=chest, pawn=player) from inside
+// cannon context.
+const Sig SIG_ChestInteract= { "\x40\x53\x48\x83\xEC\x20\x48\x8B\xDA\x48\x8B\xCA\xE8",
+                               "xxxxxxxxxxxxx", 0x10 };
 const Sig SIG_PawnMove     = { "\x48\x8B\xC4\x55\x41\x55\x41\x56\x48\x8D\x68\xA1\x48\x81\xEC",
                                "xxxxxxxxxxxxxxx", 0x30 };
 const Sig SIG_PickupGrab   = { "\x40\x53\x48\x83\xEC\x20\x48\x8B\xDA\x48\x8B\xCA\xE8\x00\x00\x00\x00",
@@ -93,12 +99,13 @@ bool KernelInvoke(uintptr_t fn, const void* argsBlock, uint32_t argBytes){
 
 bool Resolve(){
     std::scoped_lock _(r.lock);
-    r.cannonFire.addr  = Scan(SIG_CannonFire);   r.cannonFire.argBytes  = SIG_CannonFire.argBytes;
-    r.cannonMove.addr  = Scan(SIG_CannonMove);   r.cannonMove.argBytes  = SIG_CannonMove.argBytes;
-    r.cannonSeat.addr  = Scan(SIG_CannonSeat);   r.cannonSeat.argBytes  = SIG_CannonSeat.argBytes;
-    r.chestDamage.addr = Scan(SIG_ChestDamage);  r.chestDamage.argBytes = SIG_ChestDamage.argBytes;
-    r.pawnMove.addr    = Scan(SIG_PawnMove);     r.pawnMove.argBytes    = SIG_PawnMove.argBytes;
-    r.pickupGrab.addr  = Scan(SIG_PickupGrab);   r.pickupGrab.argBytes  = SIG_PickupGrab.argBytes;
+    r.cannonFire.addr    = Scan(SIG_CannonFire);   r.cannonFire.argBytes    = SIG_CannonFire.argBytes;
+    r.cannonMove.addr    = Scan(SIG_CannonMove);   r.cannonMove.argBytes    = SIG_CannonMove.argBytes;
+    r.cannonSeat.addr    = Scan(SIG_CannonSeat);   r.cannonSeat.argBytes    = SIG_CannonSeat.argBytes;
+    r.chestDamage.addr   = Scan(SIG_ChestDamage);  r.chestDamage.argBytes   = SIG_ChestDamage.argBytes;
+    r.chestInteract.addr = Scan(SIG_ChestInteract);r.chestInteract.argBytes = SIG_ChestInteract.argBytes;
+    r.pawnMove.addr      = Scan(SIG_PawnMove);     r.pawnMove.argBytes      = SIG_PawnMove.argBytes;
+    r.pickupGrab.addr    = Scan(SIG_PickupGrab);   r.pickupGrab.argBytes    = SIG_PickupGrab.argBytes;
 
     bool core = r.cannonFire.ok() && r.cannonMove.ok() &&
                 r.chestDamage.ok() && r.pawnMove.ok();
@@ -134,6 +141,15 @@ bool CannonSeat(uintptr_t c, uintptr_t pawn){
 bool ChestTakeCannonDamage(uintptr_t chest, uintptr_t cannon, float dmg){
     ArgsChestDmg a{chest, cannon, dmg};
     return KernelInvoke(r.chestDamage.addr, &a, sizeof(a));
+}
+
+#pragma pack(push, 1)
+struct ArgsChestInteract { uintptr_t self; uintptr_t pawn; };
+#pragma pack(pop)
+
+bool ChestServerInteract(uintptr_t chest, uintptr_t pawn){
+    ArgsChestInteract a{chest, pawn};
+    return KernelInvoke(r.chestInteract.addr, &a, sizeof(a));
 }
 bool PawnServerMove(uintptr_t pawn, const FVector& p, const FVector& v, uint16_t rot){
     ArgsPawnMove a{pawn, p, v, rot};

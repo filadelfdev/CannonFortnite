@@ -5,50 +5,56 @@
 
 namespace cf::feat {
 
-// Pirate Token farm — the real mechanic. Spawn/take the nearest cannon,
-// teleport the CANNON itself above each chest, aim straight down, fire.
-// The cannonball smashes the chest, server registers it as a chest break
-// via cannon damage, Pirate Token drops. Repeat for every chest in range.
+// Pirate Shop Token farm — real mechanic (Nov 2026, Treasure Hunters).
+//
+// The CORRECT model, verified against the reference recording:
+//   1. Player enters a Pirate Cannon (vehicle).
+//   2. Cannon is teleported next to a chest cluster (Busy Bay / Cursed
+//      Cavern POIs are dense).
+//   3. For EVERY chest inside interact radius, we invoke
+//      AFortBuildingContainer::ServerInteract(this=chest, pawn=player).
+//      Not fire. Not damage. Interact — the normal open path.
+//   4. N parallel ServerInteract calls per tick → N chests open at the
+//      same time. "chests_opened" counter ticks for each confirmed open.
+//   5. Pirate Shop Token odds roll server-side per chest (1 in 135k).
+//
+// No cannon fire is ever invoked — the cannon is just the vehicle the
+// player happens to be in; the server-side interact RPC is what opens
+// chests. Riding the cannon lets the player hop fast between clusters.
 struct CannonChestCfg {
     std::atomic<bool>  enabled{false};
     std::atomic<bool>  autoFire{true};
     std::atomic<bool>  teleportCannon{true};
     std::atomic<bool>  playerRidesCannon{true};
     std::atomic<bool>  preferHuntersHaven{true};
-    // v5.1 — user-requested 5/s target. Antidetect layers (RPC path,
-    // env_lie, dxgi cloak, lognormal jitter) stay active. This is the
-    // greedy end of the safe envelope; expect shorter session survival
-    // than v4 defaults. Burn-and-rotate HWID via the Security panel if
-    // a session ends in a kick.
+    // v6 — bulk-interact model (no fire).
     std::atomic<float> maxRange_m{2500.f};
-    std::atomic<float> cooldownMeanMs{190.f};       // lognormal mode
-    std::atomic<float> cooldownSpreadMs{70.f};      // legacy field (unused with lognormal)
+    std::atomic<float> cooldownMeanMs{190.f};       // per interact gate
+    std::atomic<float> cooldownSpreadMs{70.f};      // legacy, unused
     std::atomic<float> hoverHeight_cm{380.f};
     std::atomic<float> hoverJitter_cm{40.f};
-    std::atomic<float> smashMuzzleSpeed{2400.f};
-    std::atomic<float> aimPitchDeg{-89.f};
-    std::atomic<float> aimJitterDeg{1.5f};
     std::atomic<int>   chestsPerSession{0};
-    std::atomic<bool>  openOnTouch{false};           // wait for server confirm
-    std::atomic<float> serverConfirmGraceMs{180.f};  // tighter for 5/s cadence
+    std::atomic<float> serverConfirmGraceMs{180.f};
     std::atomic<bool>  skipLootedChests{true};
 
-    // Vehicle warp cap — 12000cm sits between v4 safe (7500) and v3
-    // greed (50000). Server-side vehicle envelope tolerates 10-15k
-    // per tick if not three consecutive maxes; jitter keeps us off that.
+    // Interact-radius — distance from the cannon within which every
+    // unlooted chest gets a ServerInteract call this tick.
+    std::atomic<float> interactRadius_cm{900.f};
+    // Max parallel interacts per tick (the "multiple chests at once"
+    // look in the reference recording). A real player interacts
+    // sequentially; parallel is one of the obvious detection surfaces.
+    std::atomic<int>   maxInteractsPerTick{4};
+
+    // Cannon placement — we still teleport the cannon between clusters
+    // (fast hop), but never fire it.
+    std::atomic<bool>  teleportCannon{true};
+    std::atomic<bool>  playerRidesCannon{true};
     std::atomic<float> cannonTeleportCap_cm{12000.f};
-    std::atomic<bool>  skipAlignmentCheck{true};     // write-fire same tick
-    std::atomic<int>   lookahead{10};
-    std::atomic<bool>  fireOnApproach{true};
-    std::atomic<float> fireRange_cm{360.f};
-    std::atomic<int>   maxFiresPerTick{3};
 
     std::atomic<bool>  preferRpc{true};
 
     // Master speed preset — 1 (safest, ~1/s) to 10 (unsafe, ~10/s).
-    // Writing this triggers ApplySpeedPreset() which rewrites the
-    // individual knobs below. Set to 0 to disable the preset (free tune).
-    std::atomic<int>   speedPreset{7};   // default = 5/s target
+    std::atomic<int>   speedPreset{7};
 };
 
 // Rewrites cooldownMeanMs / maxFiresPerTick / fireRange / warp cap

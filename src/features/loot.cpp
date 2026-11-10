@@ -6,6 +6,7 @@
 #include "antiban/clamp.h"
 #include "antiban/hash.h"
 #include "util/log.h"
+#include "util/report.h"
 
 #include <chrono>
 #include <algorithm>
@@ -54,10 +55,9 @@ void MagnetToward(const FVector& playerPos, uintptr_t actor, float step){
 // pickup finisher then fires on its next tick, no server interact RPC.
 void InstantPickupActor(uintptr_t pickup, uintptr_t pawn){
     cf::mem::Write(pickup + cf::off::Pickup_PickupTarget, &pawn, sizeof(uintptr_t));
-    // Also mark the pickup replicated-net-count as already-grabbed so
-    // the floating icon disappears client-side.
     uint8_t one = 1;
     cf::mem::Write(pickup + cf::off::Pickup_bServerStoppedSimulating, &one, 1);
+    cf::report::RecordEvent(cf::report::EventKind::PickupGrab);
 }
 
 } // namespace
@@ -116,13 +116,11 @@ void TickLoot(const LocalPlayerCache& lp,
 void TickMats(const LocalPlayerCache& lp){
     if(!g_matsCfg.enabled.load() || !lp.pawn) return;
 
-    // Rate-limit — writing 999 every tick is a top-of-the-bucket flag.
-    // Only pulse once every ~900ms with jitter so the server-side delta
-    // looks like "player picked up a stack", not "client wrote stack".
     static double lastPulse = 0.0;
     double now = NowSec();
     if((now - lastPulse) < 0.9) return;
     lastPulse = now;
+    cf::report::RecordEvent(cf::report::EventKind::MatsFlood);
 
     uintptr_t inv = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_InventoryComponent);
     if(!inv) return;

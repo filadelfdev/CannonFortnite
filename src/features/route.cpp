@@ -4,6 +4,7 @@
 #include "core/memory.h"
 #include "antiban/clamp.h"
 #include "util/log.h"
+#include "util/report.h"
 
 #include <chrono>
 #include <algorithm>
@@ -43,11 +44,10 @@ uint32_t ChestWeight(const Actor& a){
 void OpenChestRaw(uintptr_t chest){
     uint8_t flag = 1;
     cf::mem::Write(chest + cf::off::Chest_bAlreadySearched, &flag, 1);
-    // SearchBounceData — the four floats the client watches to play the
-    // search animation. Writing any non-zero triggers the full flow.
     float bounce[4] = { 1.f, 0.f, 0.f, 0.f };
     cf::mem::Write(chest + cf::off::Chest_SearchBounceData, bounce, sizeof(bounce));
     g_looted.fetch_add(1);
+    cf::report::RecordEvent(cf::report::EventKind::RouteOpen);
 }
 
 } // namespace

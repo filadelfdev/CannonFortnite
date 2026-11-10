@@ -21,6 +21,7 @@
 #include "features/loot.h"
 #include "features/aimbot.h"
 #include "overlay/overlay.h"
+#include "util/report.h"
 #include "antiban/antiban.h"
 #include "antiban/hash.h"
 #include "antiban/heartbeat.h"
@@ -280,6 +281,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
 
     g_run.store(false);
     if(worker.joinable()) worker.join();
+
+    // Save session report before teardown.
+    cf::report::SaveToFile();
 
     cf::ab::dxgi_k::RemoveFromTarget();
     cf::ab::StopHeartbeat();

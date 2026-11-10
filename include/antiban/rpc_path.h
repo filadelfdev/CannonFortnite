@@ -37,8 +37,15 @@ bool CannonFire(uintptr_t cannon, float launchPower, const FRotator& aim);
 bool CannonMove(uintptr_t cannon, const FVector& newPos, const FRotator& aim);
 bool CannonSeat(uintptr_t cannon, uintptr_t pawn);
 
-// Container damage — the true Pirate Token trigger.
+// Container damage — legacy (patched mechanic).
 bool ChestTakeCannonDamage(uintptr_t chest, uintptr_t cannon, float dmg);
+
+// Container interact — the CURRENT mechanic (Nov 2026). Called from
+// within the cannon with the player as instigator. Server opens the
+// chest, drops loot, rolls the Pirate Shop Token odds. Multiple
+// interacts per tick is how the "many chests at once" look is
+// produced — not a single AoE call, but N parallel invokes.
+bool ChestServerInteract(uintptr_t chest, uintptr_t pawn);
 
 // Pawn movement (used sparingly — the biggest ban vector).
 bool PawnServerMove(uintptr_t pawn,

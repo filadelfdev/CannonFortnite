@@ -14,6 +14,7 @@
 #include "antiban/dxgi_cloak.h"
 #include "antiban/dxgi_kernel.h"
 #include "spoofer/rotator.h"
+#include "util/report.h"
 #include "util/log.h"
 
 #include <windows.h>
@@ -59,8 +60,11 @@ std::atomic<bool>   g_quit{false};
 std::mutex              g_dlLock;
 std::vector<cf::feat::DrawItem> g_dl;
 
-enum class Tab { Route, Loot, Aim, Mats, Cannon, Speed, Esp, Security, About };
+enum class Tab { Route, Loot, Aim, Mats, Cannon, Speed, Esp, Report, Security, About };
 Tab g_tab = Tab::Route;
+
+// Top-left HUD toggle — the "Chests_Opened: N" counter from the ref.
+std::atomic<bool> g_showHud{true};
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp){
 #if CF_HAS_IMGUI
@@ -298,25 +302,21 @@ void PageMats(){
 }
 
 void PageCannon(){
-    // Master Speed slider — adjusts cooldown + fires/tick + warp cap +
-    // fire range + lookahead together. 1 = safest, 10 = unsafe.
     using namespace cf::ov::theme::col;
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     ImGui::TextUnformatted("velocidade (1 = seguro · 10 = perigoso)");
-    ImGui::PopStyleColor();
     int lvl = cf::feat::g_cfg.speedPreset.load();
     ImGui::SetNextItemWidth(-1);
     if(ImGui::SliderInt("##speed", &lvl, 1, 10)){
         cf::feat::ApplySpeedPreset(lvl);
     }
-    // Live rate prediction for the current level.
     static const char* labels[10] = {
-        "~1/s  (safest)",  "~1.5/s", "~2/s (v4)",  "~2.8/s",
-        "~3.5/s",          "~4.2/s", "~5/s (v5.1)","~6.5/s",
+        "~1/s  (safest)",  "~1.5/s", "~2/s",      "~2.8/s",
+        "~3.5/s",          "~4.5/s", "~5/s (default)","~6.5/s",
         "~8/s",            "~10/s (unsafe)"
     };
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextUnformatted(labels[lvl-1]);
+    ImGui::TextWrapped("v6 model: player enters cannon; cannon teleports to chest clusters; ServerInteract bulk-invoked on nearby chests. No cannon fire.");
     ImGui::PopStyleColor();
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0,4));
@@ -325,20 +325,15 @@ void PageCannon(){
     RowToggle ("prefer rpc",        cf::feat::g_cfg.preferRpc);
     RowToggle ("teleport cannon",   cf::feat::g_cfg.teleportCannon);
     RowToggle ("player rides",      cf::feat::g_cfg.playerRidesCannon);
-    RowToggle ("skip align check",  cf::feat::g_cfg.skipAlignmentCheck);
-    RowToggle ("flag on fire (dbg)",cf::feat::g_cfg.openOnTouch);
     RowToggle ("skip looted",       cf::feat::g_cfg.skipLootedChests);
     RowSliderF("range",             cf::feat::g_cfg.maxRange_m,            100.f, 3000.f, "%.0f m");
     RowSliderF("hover height",      cf::feat::g_cfg.hoverHeight_cm,        150.f, 1200.f, "%.0f cm");
     RowSliderF("hover jitter",      cf::feat::g_cfg.hoverJitter_cm,        0.f,   120.f,  "%.0f cm");
-    RowSliderF("muzzle (smash)",    cf::feat::g_cfg.smashMuzzleSpeed,      500.f, 6000.f, "%.0f");
-    RowSliderF("aim pitch",         cf::feat::g_cfg.aimPitchDeg,           -90.f, -45.f,  "%.1f deg");
-    RowSliderF("aim jitter",        cf::feat::g_cfg.aimJitterDeg,          0.f, 5.f,      "%.1f deg");
-    RowSliderF("cooldown mean",     cf::feat::g_cfg.cooldownMeanMs,        100.f, 2000.f, "%.0f ms");
-    RowSliderF("cooldown spread",   cf::feat::g_cfg.cooldownSpreadMs,      0.f, 600.f,    "%.0f ms");
-    RowSliderF("server grace",      cf::feat::g_cfg.serverConfirmGraceMs,  60.f, 800.f,   "%.0f ms");
-    RowSliderF("cannon warp cap",   cf::feat::g_cfg.cannonTeleportCap_cm,  2000.f, 15000.f,"%.0f cm");
-    RowSliderI("lookahead",         cf::feat::g_cfg.lookahead,             1, 12);
+    RowSliderF("interact radius",   cf::feat::g_cfg.interactRadius_cm,     300.f, 1500.f, "%.0f cm");
+    RowSliderI("interacts / tick",  cf::feat::g_cfg.maxInteractsPerTick,   1, 10);
+    RowSliderF("cooldown mean",     cf::feat::g_cfg.cooldownMeanMs,        50.f,  2000.f, "%.0f ms");
+    RowSliderF("server grace",      cf::feat::g_cfg.serverConfirmGraceMs,  60.f,  800.f,  "%.0f ms");
+    RowSliderF("cannon warp cap",   cf::feat::g_cfg.cannonTeleportCap_cm,  2000.f,15000.f,"%.0f cm");
     RowSliderI("session limit",     cf::feat::g_cfg.chestsPerSession,      0, 2000);
     ImGui::Dummy(ImVec2(0,4));
     if(ImGui::Button("reset counter")) cf::feat::ResetSmashCounter();
@@ -443,6 +438,71 @@ void PageSecurity(){
     }
 }
 
+void PageReport(){
+    using namespace cf::ov::theme::col;
+    auto s = cf::report::Current();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
+    char buf[160];
+    std::snprintf(buf, 160, "%u baús  ·  %u pirate tokens", s.totalChests(), s.tokenDrops);
+    ImGui::TextUnformatted(buf);
+    ImGui::PopStyleColor();
+
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    std::snprintf(buf, 160, "sessão: %.0fs (%.1f min)", s.sessionSeconds, s.sessionSeconds/60.0);
+    ImGui::TextUnformatted(buf);
+    ImGui::PopStyleColor();
+
+    ImGui::Dummy(ImVec2(0, 8));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 4));
+
+    auto row = [&](const char* label, const char* val){
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextUnformatted(label);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(160);
+        ImGui::TextUnformatted(val);
+    };
+
+    std::snprintf(buf, 160, "%u", s.cannonSmashes);  row("cannon smashes", buf);
+    std::snprintf(buf, 160, "%u", s.routeOpens);     row("route opens", buf);
+    std::snprintf(buf, 160, "%u", s.bulkOpens);      row("bulk opens", buf);
+    std::snprintf(buf, 160, "%u", s.pickupGrabs);    row("pickups", buf);
+    std::snprintf(buf, 160, "%u", s.matsPulses);     row("mats pulses", buf);
+
+    ImGui::Dummy(ImVec2(0, 8));
+    std::snprintf(buf, 160, "%.2f/s", s.avgRatePerSec);           row("avg rate", buf);
+    std::snprintf(buf, 160, "%.2f/s", s.peakRatePerSec);          row("peak (5s)", buf);
+    std::snprintf(buf, 160, "%.0f ms", s.minIntervalMs);          row("min interval", buf);
+    std::snprintf(buf, 160, "%.0f ms", s.maxIntervalMs);          row("max interval", buf);
+    std::snprintf(buf, 160, "%u / %u", s.minChestsPerMin, s.maxChestsPerMin);
+    row("worst / best / min", buf);
+
+    ImGui::Dummy(ImVec2(0, 10));
+
+    // Token projection.
+    if(s.avgRatePerSec > 0.0){
+        double hoursPerToken = 135000.0 / (s.avgRatePerSec * 3600.0);
+        double expectedTokens = s.sessionSeconds * s.avgRatePerSec / 135000.0;
+        std::snprintf(buf, 160, "projeção: %.1f h/token · %.2f tokens esperados",
+                      hoursPerToken, expectedTokens);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s", buf);
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::Dummy(ImVec2(0, 8));
+    if(ImGui::Button("salvar relatório .txt")){
+        cf::report::SaveToFile();
+    }
+    ImGui::SameLine();
+    if(ImGui::Button("resetar")) cf::report::Reset();
+    ImGui::SameLine();
+    bool hud = g_showHud.load();
+    if(ImGui::Checkbox("hud top-left", &hud)) g_showHud.store(hud);
+}
+
 void PageAbout(){
     using namespace cf::ov::theme::col;
     ImGui::PushStyleColor(ImGuiCol_Text, X(text));
@@ -512,6 +572,19 @@ void DrawFrame(){
         for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
+    // ---- Top-left HUD — "Chests_Opened" counter, mirrors the ref video ----
+    if(g_showHud.load()){
+        auto* bgdl = ImGui::GetBackgroundDrawList();
+        auto sum = cf::report::Current();
+        char line[64];
+        std::snprintf(line, 64, "Chests_Opened: %u", sum.totalChests());
+        ImVec2 sz = ImGui::CalcTextSize(line);
+        // Red-ish backdrop like the ref.
+        bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(sz.x + 18, sz.y + 10),
+                            IM_COL32(190, 30, 30, 200), 0);
+        bgdl->AddText(ImVec2(8, 5), IM_COL32_WHITE, line);
+    }
+
     // ---- menu ----
     if(g_ovCfg.showMenu.load()){
         using namespace cf::ov::theme::col;
@@ -555,11 +628,12 @@ void DrawFrame(){
         // Sidebar + content split
         ImGui::BeginChild("##sidebar", ImVec2(140, 0), false);
           ImGui::Dummy(ImVec2(0, 4));
+          TabButton("cannon",   Tab::Cannon);
+          TabButton("report",   Tab::Report);
           TabButton("route",    Tab::Route);
           TabButton("loot",     Tab::Loot);
           TabButton("aim",      Tab::Aim);
           TabButton("mats",     Tab::Mats);
-          TabButton("cannon",   Tab::Cannon);
           TabButton("speed",    Tab::Speed);
           TabButton("esp",      Tab::Esp);
           TabButton("security", Tab::Security);
@@ -568,11 +642,12 @@ void DrawFrame(){
         ImGui::SameLine();
         ImGui::BeginChild("##content", ImVec2(0, 0), false);
           switch(g_tab){
+              case Tab::Cannon:   PageCannon();   break;
+              case Tab::Report:   PageReport();   break;
               case Tab::Route:    PageRoute();    break;
               case Tab::Loot:     PageLoot();     break;
               case Tab::Aim:      PageAim();      break;
               case Tab::Mats:     PageMats();     break;
-              case Tab::Cannon:   PageCannon();   break;
               case Tab::Speed:    PageSpeed();    break;
               case Tab::Esp:      PageEsp();      break;
               case Tab::Security: PageSecurity(); break;
