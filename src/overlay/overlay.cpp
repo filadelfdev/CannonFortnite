@@ -580,20 +580,38 @@ void DrawFrame(){
         for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
-    // ---- Top-left HUD — "Chests Searched: N" + XP counter ----
+    // ---- Top-left HUD — mimics RZAIM-style compact readout ----
+    //   line 1: brand + session hash (first 16 hex of process base)
+    //   line 2: Chests Opened: N  |  [RAM: ACTIVE/IDLE]
+    //   line 3: +XP earned (yellow accent)
     if(g_showHud.load()){
         auto* bgdl = ImGui::GetBackgroundDrawList();
         auto sum = cf::report::Current();
-        char l1[64], l2[64];
-        std::snprintf(l1, 64, "Chests Searched: %u", sum.totalChests());
-        std::snprintf(l2, 64, "+%u XP", sum.totalXp());
+
+        bool ramLive = cf::mem::IsAttached();
+        bool kernel  = cf::mem::KernelActive();
+
+        char l1[96], l2[96], l3[64];
+        std::snprintf(l1, 96, "CF PIRATE RIPPER  %016llx",
+                      (unsigned long long)cf::mem::Base());
+        std::snprintf(l2, 96, "Chests Opened: %u  |  [RAM: %s%s]",
+                      sum.totalChests(),
+                      ramLive ? "ACTIVE" : "IDLE",
+                      kernel  ? "+K"      : "");
+        std::snprintf(l3, 64, "+%u XP", sum.totalXp());
+
         ImVec2 s1 = ImGui::CalcTextSize(l1);
         ImVec2 s2 = ImGui::CalcTextSize(l2);
-        float w = (s1.x > s2.x ? s1.x : s2.x) + 18;
-        bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(w, s1.y + s2.y + 14),
-                            IM_COL32(190, 30, 30, 200), 0);
-        bgdl->AddText(ImVec2(8, 4), IM_COL32_WHITE, l1);
-        bgdl->AddText(ImVec2(8, 4 + s1.y + 2), IM_COL32(255, 220, 90, 255), l2);
+        ImVec2 s3 = ImGui::CalcTextSize(l3);
+        float w = std::max(std::max(s1.x, s2.x), s3.x) + 18;
+        float h = s1.y + s2.y + s3.y + 18;
+
+        bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h),
+                            IM_COL32(190, 30, 30, 220), 0);
+        bgdl->AddText(ImVec2(8, 4),                       IM_COL32_WHITE, l1);
+        ImU32 ramCol = ramLive ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 80, 80, 255);
+        bgdl->AddText(ImVec2(8, 4 + s1.y + 2),            ramCol,         l2);
+        bgdl->AddText(ImVec2(8, 4 + s1.y + s2.y + 4),     IM_COL32(255, 220, 90, 255), l3);
     }
 
     // ---- menu ----
