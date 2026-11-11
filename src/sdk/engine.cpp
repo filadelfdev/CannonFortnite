@@ -132,21 +132,23 @@ bool EnumerateActors(std::vector<uintptr_t>& out){
 void ClassifyActor(Actor& a){
     uint64_t h = cf::ab::fnv1a_lower(a.className.c_str());
 
-    // Normal breakable chests — cannon-smashable, drops the token roll.
+    // Normal breakable chests — ServerInteract target, +600 XP per open.
     constexpr uint64_t H_Tiered_Chest   = cf::ab::fnv1a_lower("Tiered_Chest_Athena_C");
     constexpr uint64_t H_Tiered_Ammo    = cf::ab::fnv1a_lower("Tiered_Ammo_Athena_C");
     constexpr uint64_t H_BuildContainer = cf::ab::fnv1a_lower("BuildingContainer_C");
     constexpr uint64_t H_RareChest      = cf::ab::fnv1a_lower("Tiered_Chest_Rare_Athena_C");
     constexpr uint64_t H_PirateChest    = cf::ab::fnv1a_lower("Tiered_Chest_Pirate_Athena_C");
+    // Reference comp (Nov 2026 Treasure Hunters) also shows the golden
+    // skull "Sprite Chest" and "Pirate Chest" opening via proximity —
+    // treat both as normal chests, NOT vaults. Only the vault chests
+    // behind a locked door need a key.
+    constexpr uint64_t H_Sprite_Chest   = cf::ab::fnv1a_lower("Tiered_Sprite_Chest_Athena_C");
+    constexpr uint64_t H_Pirate_Golden  = cf::ab::fnv1a_lower("Tiered_PirateChest_Athena_C");
 
-    // Vault / Sprite chests — NEVER target. The cannon-break path no
-    // longer applies to these (Nov 2026 patch); shooting one is wasted
-    // ammo + a behaviour-classifier trigger.
-    // FILL per-patch — class names below are best-known as of Nov 2026.
+    // Vault chests — only openable via Vault Key, not interact.
     constexpr uint64_t H_VaultChest1    = cf::ab::fnv1a_lower("Tiered_Vault_Chest_Pirate_Athena_C");
     constexpr uint64_t H_VaultChest2    = cf::ab::fnv1a_lower("Vault_Chest_Pirate_C");
     constexpr uint64_t H_VaultChest3    = cf::ab::fnv1a_lower("Pirate_Vault_Chest_C");
-    constexpr uint64_t H_SpriteChest    = cf::ab::fnv1a_lower("Tiered_Sprite_Chest_Athena_C");
     constexpr uint64_t H_VaultDoor      = cf::ab::fnv1a_lower("Pirate_Vault_Door_C");
 
     constexpr uint64_t H_SupplyDrop     = cf::ab::fnv1a_lower("AthenaSupplyDrop_C");
@@ -155,12 +157,12 @@ void ClassifyActor(Actor& a){
     constexpr uint64_t H_FortPawn       = cf::ab::fnv1a_lower("FortPlayerPawnAthena_C");
 
     a.isVaultChest = (h==H_VaultChest1 || h==H_VaultChest2 ||
-                      h==H_VaultChest3 || h==H_SpriteChest ||
-                      h==H_VaultDoor);
+                      h==H_VaultChest3 || h==H_VaultDoor);
     a.isChest    = !a.isVaultChest &&
                    (h==H_Tiered_Chest || h==H_Tiered_Ammo ||
                     h==H_BuildContainer || h==H_RareChest ||
-                    h==H_PirateChest);
+                    h==H_PirateChest || h==H_Sprite_Chest ||
+                    h==H_Pirate_Golden);
     a.isLootDrop = (h==H_SupplyDrop);
     a.isCannon   = (h==H_Cannon || h==H_CannonAlt);
     a.isPlayer   = (h==H_FortPawn);

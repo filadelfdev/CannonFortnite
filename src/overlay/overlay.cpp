@@ -63,7 +63,10 @@ std::vector<cf::feat::DrawItem> g_dl;
 enum class Tab { Route, Loot, Aim, Mats, Cannon, Speed, Esp, Report, Security, About };
 Tab g_tab = Tab::Route;
 
-// Top-left HUD toggle — the "Chests_Opened: N" counter from the ref.
+// Top-left HUD toggle — the "Chests Searched: N" counter mirroring the
+// in-game string the reference compilation shows (frame 20: "Chests
+// Searched: 21"). Matches the server-side counter the game itself
+// maintains when ServerInteract fires.
 std::atomic<bool> g_showHud{true};
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp){
@@ -572,14 +575,13 @@ void DrawFrame(){
         for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
-    // ---- Top-left HUD — "Chests_Opened" counter, mirrors the ref video ----
+    // ---- Top-left HUD — "Chests Searched: N" counter, mirrors the ref ----
     if(g_showHud.load()){
         auto* bgdl = ImGui::GetBackgroundDrawList();
         auto sum = cf::report::Current();
         char line[64];
-        std::snprintf(line, 64, "Chests_Opened: %u", sum.totalChests());
+        std::snprintf(line, 64, "Chests Searched: %u", sum.totalChests());
         ImVec2 sz = ImGui::CalcTextSize(line);
-        // Red-ish backdrop like the ref.
         bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(sz.x + 18, sz.y + 10),
                             IM_COL32(190, 30, 30, 200), 0);
         bgdl->AddText(ImVec2(8, 5), IM_COL32_WHITE, line);
