@@ -176,10 +176,10 @@ bool SaveToFile(){
     f << "\n";
     f << "projection\n";
     if(s.avgRatePerSec > 0){
-        double xpPerHour = s.avgRatePerSec * 3600.0 * 600.0;
+        double xpPerHour     = s.avgRatePerSec * 3600.0 * 600.0;
         double hoursPerToken = 135000.0 / (s.avgRatePerSec * 3600.0);
         f << "  XP per hour      : " << std::setprecision(0) << xpPerHour << "\n";
-        f << "  BP max (~8M XP)  : " << std::setprecision(1) << (8000000.0 / xpPerHour) << " h\n";
+        f << "  BP levels / hr   : " << std::setprecision(2) << (xpPerHour / 80000.0) << "\n";
         f << "  hours per token  : " << std::setprecision(1) << hoursPerToken << " h  (lottery, 1/135k)\n";
     }
     f << "\n";

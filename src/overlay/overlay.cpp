@@ -485,17 +485,17 @@ void PageReport(){
 
     ImGui::Dummy(ImVec2(0, 10));
 
-    // XP + token projection.
+    // XP + token projection (BP sem cap — mini-season Treasure Hunters).
     if(s.avgRatePerSec > 0.0){
         double xpPerHour     = s.avgRatePerSec * 3600.0 * 600.0;
-        double hoursToMaxBp  = 8000000.0 / xpPerHour;
+        double levelsPerHour = xpPerHour / 80000.0;
         double hoursPerToken = 135000.0 / (s.avgRatePerSec * 3600.0);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        std::snprintf(buf, 160, "XP/hora: %.0f  ·  ~%.1f níveis BP", xpPerHour, s.approxBpLevels());
+        std::snprintf(buf, 160, "ganho desta sessão: %u XP  ·  %.1f níveis BP", s.totalXp(), s.approxBpLevels());
         ImGui::TextUnformatted(buf);
-        std::snprintf(buf, 160, "BP max (~8M XP): %.1f h", hoursToMaxBp);
+        std::snprintf(buf, 160, "XP/hora: %.0f  ·  %.1f níveis/hora", xpPerHour, levelsPerHour);
         ImGui::TextUnformatted(buf);
-        std::snprintf(buf, 160, "token lottery: %.1f h/token (1/135k)", hoursPerToken);
+        std::snprintf(buf, 160, "token lottery: %.1f h/token esperado (1/135k)", hoursPerToken);
         ImGui::TextUnformatted(buf);
         ImGui::PopStyleColor();
     }
