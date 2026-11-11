@@ -31,13 +31,17 @@ struct Summary {
     uint32_t tokenDrops;
     double   avgRatePerSec;
     double   peakRatePerSec;
-    double   minIntervalMs;      // tightest gap between two smashes
-    double   maxIntervalMs;      // longest pause
-    uint32_t minChestsPerMin;    // worst minute
-    uint32_t maxChestsPerMin;    // best minute
+    double   minIntervalMs;
+    double   maxIntervalMs;
+    uint32_t minChestsPerMin;
+    uint32_t maxChestsPerMin;
     uint32_t totalChests() const {
         return cannonSmashes + routeOpens + bulkOpens;
     }
+    // Each server-side chest open = +600 Battle Pass XP (Treasure Hunters).
+    uint32_t totalXp() const { return totalChests() * 600; }
+    // Rough BP-level estimate — assumes 80k XP per level (typical).
+    double   approxBpLevels() const { return totalXp() / 80000.0; }
 };
 
 Summary Current();

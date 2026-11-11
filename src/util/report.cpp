@@ -156,13 +156,16 @@ bool SaveToFile(){
     f << "cannon ripper — session report\n";
     f << "===============================\n\n";
     f << "duration           : " << std::fixed << std::setprecision(1) << s.sessionSeconds << " s  (" << (s.sessionSeconds/60.0) << " min)\n";
-    f << "chests total       : " << s.totalChests() << "\n";
+    f << "chests searched    : " << s.totalChests() << "\n";
     f << "  cannon smashes   : " << s.cannonSmashes << "\n";
     f << "  route opens      : " << s.routeOpens << "\n";
     f << "  bulk opens       : " << s.bulkOpens << "\n";
     f << "pickups grabbed    : " << s.pickupGrabs << "\n";
     f << "mats pulses        : " << s.matsPulses << "\n";
     f << "pirate tokens      : " << s.tokenDrops << "\n";
+    f << "\n";
+    f << "XP farmed (600/chest): " << s.totalXp() << "\n";
+    f << "approx BP levels     : " << std::setprecision(1) << s.approxBpLevels() << "\n";
     f << "\n";
     f << "rate — avg         : " << std::setprecision(2) << s.avgRatePerSec << " chests/s\n";
     f << "rate — peak (5s)   : " << s.peakRatePerSec << " chests/s\n";
@@ -171,11 +174,13 @@ bool SaveToFile(){
     f << "worst minute       : " << s.minChestsPerMin << " chests\n";
     f << "best minute        : " << s.maxChestsPerMin << " chests\n";
     f << "\n";
-    f << "projection (1 token = 135k chests)\n";
+    f << "projection\n";
     if(s.avgRatePerSec > 0){
+        double xpPerHour = s.avgRatePerSec * 3600.0 * 600.0;
         double hoursPerToken = 135000.0 / (s.avgRatePerSec * 3600.0);
-        f << "  hours per token  : " << std::setprecision(1) << hoursPerToken << " h\n";
-        f << "  expected tokens  : " << std::setprecision(2) << (s.sessionSeconds * s.avgRatePerSec / 135000.0) << "\n";
+        f << "  XP per hour      : " << std::setprecision(0) << xpPerHour << "\n";
+        f << "  BP max (~8M XP)  : " << std::setprecision(1) << (8000000.0 / xpPerHour) << " h\n";
+        f << "  hours per token  : " << std::setprecision(1) << hoursPerToken << " h  (lottery, 1/135k)\n";
     }
     f << "\n";
     f << "built by olivia — https://discord.gg/ojailbreaks\n";

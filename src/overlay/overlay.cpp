@@ -447,7 +447,8 @@ void PageReport(){
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_Text));
     char buf[160];
-    std::snprintf(buf, 160, "%u baús  ·  %u pirate tokens", s.totalChests(), s.tokenDrops);
+    std::snprintf(buf, 160, "%u baús  ·  %u XP  ·  %u tokens",
+                  s.totalChests(), s.totalXp(), s.tokenDrops);
     ImGui::TextUnformatted(buf);
     ImGui::PopStyleColor();
 
@@ -484,14 +485,18 @@ void PageReport(){
 
     ImGui::Dummy(ImVec2(0, 10));
 
-    // Token projection.
+    // XP + token projection.
     if(s.avgRatePerSec > 0.0){
+        double xpPerHour     = s.avgRatePerSec * 3600.0 * 600.0;
+        double hoursToMaxBp  = 8000000.0 / xpPerHour;
         double hoursPerToken = 135000.0 / (s.avgRatePerSec * 3600.0);
-        double expectedTokens = s.sessionSeconds * s.avgRatePerSec / 135000.0;
-        std::snprintf(buf, 160, "projeção: %.1f h/token · %.2f tokens esperados",
-                      hoursPerToken, expectedTokens);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", buf);
+        std::snprintf(buf, 160, "XP/hora: %.0f  ·  ~%.1f níveis BP", xpPerHour, s.approxBpLevels());
+        ImGui::TextUnformatted(buf);
+        std::snprintf(buf, 160, "BP max (~8M XP): %.1f h", hoursToMaxBp);
+        ImGui::TextUnformatted(buf);
+        std::snprintf(buf, 160, "token lottery: %.1f h/token (1/135k)", hoursPerToken);
+        ImGui::TextUnformatted(buf);
         ImGui::PopStyleColor();
     }
 
@@ -575,16 +580,20 @@ void DrawFrame(){
         for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
-    // ---- Top-left HUD — "Chests Searched: N" counter, mirrors the ref ----
+    // ---- Top-left HUD — "Chests Searched: N" + XP counter ----
     if(g_showHud.load()){
         auto* bgdl = ImGui::GetBackgroundDrawList();
         auto sum = cf::report::Current();
-        char line[64];
-        std::snprintf(line, 64, "Chests Searched: %u", sum.totalChests());
-        ImVec2 sz = ImGui::CalcTextSize(line);
-        bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(sz.x + 18, sz.y + 10),
+        char l1[64], l2[64];
+        std::snprintf(l1, 64, "Chests Searched: %u", sum.totalChests());
+        std::snprintf(l2, 64, "+%u XP", sum.totalXp());
+        ImVec2 s1 = ImGui::CalcTextSize(l1);
+        ImVec2 s2 = ImGui::CalcTextSize(l2);
+        float w = (s1.x > s2.x ? s1.x : s2.x) + 18;
+        bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(w, s1.y + s2.y + 14),
                             IM_COL32(190, 30, 30, 200), 0);
-        bgdl->AddText(ImVec2(8, 5), IM_COL32_WHITE, line);
+        bgdl->AddText(ImVec2(8, 4), IM_COL32_WHITE, l1);
+        bgdl->AddText(ImVec2(8, 4 + s1.y + 2), IM_COL32(255, 220, 90, 255), l2);
     }
 
     // ---- menu ----
