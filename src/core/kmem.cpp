@@ -10,12 +10,12 @@ namespace cf::kmem {
 
 namespace {
 
-// IOCTLs match driver/kread.c. METHOD_NEITHER so we avoid the probe
-// trace that METHOD_BUFFERED leaves in the io-manager log.
-constexpr uint32_t IOCTL_CF_ARM   = 0x81001000;
-constexpr uint32_t IOCTL_CF_READ  = 0x81001004;
-constexpr uint32_t IOCTL_CF_WRITE = 0x81001008;
-constexpr uint32_t IOCTL_CF_BATCH = 0x8100100C;
+// IOCTLs match driver/kread.c via the shared header — zero drift.
+#include "../../driver/cf_ioctl.h"
+constexpr uint32_t IOCTL_CF_ARM   = CF_ARM;
+constexpr uint32_t IOCTL_CF_READ  = CF_READ;
+constexpr uint32_t IOCTL_CF_WRITE = CF_WRITE;
+constexpr uint32_t IOCTL_CF_BATCH = CF_BATCH;
 
 HANDLE          g_dev = INVALID_HANDLE_VALUE;
 std::mutex      g_lock;

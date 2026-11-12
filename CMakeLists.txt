@@ -8,7 +8,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
     add_compile_options(/W4 /permissive- /Zc:preprocessor /EHsc /MP)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
-    add_link_options(/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+    # SUBSYSTEM:WINDOWS pairs with WinMainCRTStartup (default entry
+    # the CRT selects based on the `WinMain` symbol in the program).
+    # Do NOT force /ENTRY — the CRT picks the right startup shim.
+    add_link_options(/SUBSYSTEM:WINDOWS)
 else()
     add_compile_options(-Wall -Wextra -Wno-missing-field-initializers -Wno-unused-parameter)
 endif()

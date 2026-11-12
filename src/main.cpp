@@ -71,9 +71,9 @@ void WorkerLoop(){
         // Full re-enum every 6th tick (~24ms). Faster than before so
         // freshly-spawned chests enter the queue inside one cannon
         // cooldown window at 5+/s smash rate.
-        // Class-name cache flushes every ~500 enums (~2s) so a reused
-        // actor address can't serve a stale class-name indefinitely.
-        if((frame % (6 * 500)) == 0) cf::sdk::InvalidateClassCache();
+        // Class-name cache flushes every ~80 enums (~2s real @ 24ms per
+        // enum). Previous `6 * 500` was ~12s — stale pointers survived.
+        if((frame % 80) == 0) cf::sdk::InvalidateClassCache();
         if((frame++ % 6) == 0){
             std::vector<uintptr_t> ptrs;
             if(cf::sdk::EnumerateActors(ptrs)){
@@ -208,13 +208,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
             }
         }
         // v5: feed DXGI cloak a deterministic adapter identity
-        // derived from the slot so the GPU identity rotates with HWID.
-        // GPU list tuned for a mid-low-tier host (RX 580 class). All
-        // entries deliver 35-65fps range in Fortnite Chapter 7 UE5, so
-        // the reported GPU matches the measured frame-time envelope
-        // from the player's real hardware — no "high-end GPU on a
-        // slow box" mismatch to flag.
-        uint32_t seed = (uint32_t)cf::ab::fnv1a(fp.machineGuid.c_str());
+        // derived from the marker slot (seed already set above from the
+        // marker file). No `fp` struct lives in this process anymore —
+        // the spoofer standalone owns it.
         static const char* gpus[] = {
             "NVIDIA GeForce GTX 1060 6GB",
             "NVIDIA GeForce GTX 1650",

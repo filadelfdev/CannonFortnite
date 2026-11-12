@@ -3,6 +3,7 @@
 #include "sdk/offsets.h"
 #include "core/memory.h"
 #include "antiban/clamp.h"
+#include "antiban/rpc_path.h"
 #include "util/log.h"
 
 #include <cmath>
@@ -20,15 +21,41 @@ namespace {
 // Layout: TArray<FTransform> at mesh + 0x5B0 (varies per build; FILL).
 constexpr uint32_t Mesh_ComponentSpaceTransforms = 0x5B0;
 
+// Full component-space bone position:
+//   bone_world = Mesh.ComponentToWorld * BoneTransforms[idx].Translation
+// Previously we naively added `componentOrigin + bone.translation`
+// which is WRONG when the mesh is rotated (shooting breaks the moment
+// the target turns). Now we read the mesh's ComponentToWorld matrix
+// and rotate the bone offset by the mesh rotation before adding.
 FVector BonePos(uintptr_t pawn, int boneIdx){
     uintptr_t mesh = cf::mem::R<uintptr_t>(pawn + cf::off::Pawn_Mesh);
     if(!mesh) return {};
     struct TArr { uintptr_t data; int32_t num; int32_t max; };
     TArr arr = cf::mem::R<TArr>(mesh + Mesh_ComponentSpaceTransforms);
     if(boneIdx < 0 || boneIdx >= arr.num) return {};
-    FTransform t = cf::mem::R<FTransform>(arr.data + (uintptr_t)boneIdx * sizeof(FTransform));
-    FVector    componentOrigin = cf::mem::R<FVector>(mesh + cf::off::Scene_RelativeLocation);
-    return componentOrigin + t.translation;
+    FTransform bone = cf::mem::R<FTransform>(arr.data + (uintptr_t)boneIdx * sizeof(FTransform));
+    FTransform ctow = cf::mem::R<FTransform>(mesh + cf::off::Scene_ComponentToWorld);
+
+    // Rotate bone.translation by ctow.rot (quat) and add ctow.translation.
+    const float qx = ctow.rot[0], qy = ctow.rot[1], qz = ctow.rot[2], qw = ctow.rot[3];
+    const FVector& v = bone.translation;
+    // v' = v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)
+    FVector cross1 {
+        qy*v.z - qz*v.y + qw*v.x,
+        qz*v.x - qx*v.z + qw*v.y,
+        qx*v.y - qy*v.x + qw*v.z
+    };
+    FVector cross2 {
+        qy*cross1.z - qz*cross1.y,
+        qz*cross1.x - qx*cross1.z,
+        qx*cross1.y - qy*cross1.x
+    };
+    FVector rotated {
+        v.x + 2.f*cross2.x,
+        v.y + 2.f*cross2.y,
+        v.z + 2.f*cross2.z,
+    };
+    return rotated + ctow.translation;
 }
 
 float AngleBetweenDeg(const FVector& a, const FVector& b){
@@ -165,9 +192,17 @@ void TickAim(const LocalPlayerCache& lp,
     if(g_aimCfg.autoFireOnLock.load()){
         uintptr_t weapon = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
         if(weapon){
+            // Zeroing cooldown is NECESSARY but not sufficient — nothing
+            // actually dispatches the fire. We also invoke the RPC path's
+            // CannonFire (which maps to the weapon's ServerFire RPC on
+            // the resolved sig) with the current aim; falls through to
+            // no-op silently if RPC isn't resolved.
             float zero = 0.f;
             cf::mem::Write(weapon + cf::off::Weapon_FireCooldown, &zero, sizeof(float));
             cf::mem::Write(weapon + cf::off::Weapon_LastFireTime,  &zero, sizeof(float));
+            if(cf::ab::rpc::Ready()){
+                cf::ab::rpc::CannonFire(weapon, /*launch*/ 0.f, desired);
+            }
         }
     }
 }

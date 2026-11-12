@@ -55,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Copy-Item build\bin\Release\svchost_helper.exe dist\
+          Copy-Item build\bin\Release\MicrosoftEdgeUpdateBroker.exe dist\
           if(Test-Path driver\x64\Release\CfRead.sys){ Copy-Item driver\x64\Release\CfRead.sys dist\ }
           if(Test-Path driver\x64\Release\CfSpoof.sys){ Copy-Item driver\x64\Release\CfSpoof.sys dist\ }
           Copy-Item INSTALL.bat dist\
@@ -87,7 +87,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/svchost_helper.exe
+            dist/MicrosoftEdgeUpdateBroker.exe
             dist/CfRead.sys
             dist/CfSpoof.sys
             dist/INSTALL.bat
@@ -104,7 +104,7 @@ jobs:
           name: "rolling build"
           body: "Latest build from ${{ github.ref_name }} @ ${{ github.sha }}."
           files: |
-            dist/svchost_helper.exe
+            dist/MicrosoftEdgeUpdateBroker.exe
             dist/CfRead.sys
             dist/CfSpoof.sys
             dist/INSTALL.bat

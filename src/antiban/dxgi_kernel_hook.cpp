@@ -18,10 +18,11 @@ namespace cf::ab::dxgi_k {
 
 namespace {
 
-// IOCTLs used by this module — mirrored in driver/kread.c extension.
-constexpr uint32_t IOCTL_CF_ALLOC_RWX     = 0x81001020;  // alloc in target
-constexpr uint32_t IOCTL_CF_FREE_RWX      = 0x81001024;
-constexpr uint32_t IOCTL_CF_PATCH_QWORD   = 0x81001028;  // atomic qword write in target
+// IOCTLs from the shared header — synced with driver/kread.c.
+#include "../../driver/cf_ioctl.h"
+constexpr uint32_t IOCTL_CF_ALLOC_RWX   = CF_ALLOC_RWX;
+constexpr uint32_t IOCTL_CF_FREE_RWX    = CF_FREE_RWX;
+constexpr uint32_t IOCTL_CF_PATCH_QWORD = CF_PATCH_QWORD;
 
 struct AllocReply { uint64_t address; uint32_t size; uint32_t pad; };
 

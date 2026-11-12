@@ -67,7 +67,8 @@ uintptr_t Scan(const Sig& s){
 // {fn, argBytes, bytes...} to the kernel, which schedules a work-item
 // bound to the game's render-thread APC queue so the call executes
 // inside the game's own tick.
-constexpr uint32_t IOCTL_CF_INVOKE = 0x81001010;
+#include "../../driver/cf_ioctl.h"
+constexpr uint32_t IOCTL_CF_INVOKE = CF_INVOKE;
 
 struct InvokeWire {
     uint64_t fn;

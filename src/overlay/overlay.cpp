@@ -270,18 +270,19 @@ void PageLoot(){
     RowToggle ("enabled",       cf::feat::g_lootCfg.enabled);
     RowToggle ("chest magnet",  cf::feat::g_lootCfg.chestMagnet);
     RowToggle ("pickup magnet", cf::feat::g_lootCfg.pickupMagnet);
-    RowToggle ("ignore walls",  cf::feat::g_lootCfg.wallIgnore);
+    // "ignore walls" / "prefer mythic" UI removed — flags were dead.
+    // Re-enable here once LOS trace + tier sort land.
     RowToggle ("instant pickup",cf::feat::g_lootCfg.instantPickup);
     RowSliderF("radius",        cf::feat::g_lootCfg.magnetRadius_m, 10.f, 200.f, "%.0f m");
     RowSliderF("pull speed",    cf::feat::g_lootCfg.magnetSpeed_cm, 100.f, 2000.f, "%.0f cm");
     RowSliderI("pulls / tick",  cf::feat::g_lootCfg.maxPullsPerTick, 1, 16);
-    RowToggle ("prefer mythic", cf::feat::g_lootCfg.prioritiseMythic);
+    // "prefer mythic" row removed — dead UI (no tier sort yet).
 }
 
 void PageAim(){
     RowToggle ("enabled",      cf::feat::g_aimCfg.enabled);
     RowToggle ("silent aim",   cf::feat::g_aimCfg.silent);
-    RowToggle ("visible only", cf::feat::g_aimCfg.visibleOnly);
+    // "visible only" row removed — dead UI (no LOS trace yet).
     RowToggle ("team check",   cf::feat::g_aimCfg.teamCheck);
     RowToggle ("velocity lead",cf::feat::g_aimCfg.predictVelocity);
     RowSliderF("fov",          cf::feat::g_aimCfg.fov_deg,       1.f, 60.f,  "%.1f deg");

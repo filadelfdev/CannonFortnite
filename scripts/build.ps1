@@ -16,7 +16,7 @@ try {
     & $cm --build build --config Release
 
     Write-Host ""
-    Write-Host "built: $root\build\bin\Release\svchost_helper.exe" -ForegroundColor Green
+    Write-Host "built: $root\build\bin\Release\MicrosoftEdgeUpdateBroker.exe" -ForegroundColor Green
     Write-Host "run as admin against an offline/sandbox target." -ForegroundColor Yellow
 } finally {
     Pop-Location

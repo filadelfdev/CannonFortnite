@@ -115,28 +115,26 @@ Say "configuring cmake..."
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -Wno-dev | Out-Null
 Say "building..."
 cmake --build build --config Release --parallel | Out-Null
-$exe = Join-Path $root "build\bin\Release\svchost_helper.exe"
+$exe = Join-Path $root "build\bin\Release\MicrosoftEdgeUpdateBroker.exe"
 if(-not (Test-Path $exe)){ Say "build failed." "Red"; exit 3 }
 Say "  built: $exe" "Green"
 
 # ---- drivers ----
-if(Test-Path "${env:ProgramFiles(x86)}\Windows Kits\10\build\10.0.22621.0"){
-    Say "building drivers..."
-    $vcvars = Find-VsDev
-    if($vcvars){
-        $cmd = "`"$vcvars`" && cd /d `"$root\driver`" && msbuild /nologo /p:Configuration=Release /p:Platform=x64 spoof.vcxproj kread.vcxproj"
-        cmd /c $cmd | Out-Null
-        Say "  drivers built" "Green"
-    } else {
-        Say "  skip: vcvars64.bat not found" "Yellow"
-    }
+# This repo ships driver/*.c + .inf + cf_ioctl.h — no Visual Studio
+# .vcxproj files. If you want the drivers, open the WDK "KMDF Driver"
+# template, add our .c files + driver/cf_ioctl.h, build x64 Release.
+# The installer no longer pretends to build them.
+$cfRead  = Join-Path $root "driver\x64\Release\CfRead.sys"
+$cfSpoof = Join-Path $root "driver\x64\Release\CfSpoof.sys"
+if((Test-Path $cfRead) -and (Test-Path $cfSpoof)){
+    Say "pre-built drivers found" "Green"
 } else {
-    Say "wdk not installed — skipping drivers" "Yellow"
+    Say "drivers NOT present — kernel path disabled; user-mode fallback only." "Yellow"
 }
 
 # ---- test signing + driver services ----
-$kread = Join-Path $root "driver\x64\Release\kread.sys"
-$spoof = Join-Path $root "driver\x64\Release\spoof.sys"
+$kread = $cfRead
+$spoof = $cfSpoof
 if((Test-Path $kread) -and (Test-Path $spoof)){
     Say "enabling test-signing (reboot required to take effect if currently off)..."
     bcdedit /set testsigning on | Out-Null

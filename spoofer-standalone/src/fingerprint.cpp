@@ -5,6 +5,7 @@
 #define CF_ERR(...)  cf::spoofer::util::Err(__VA_ARGS__)
 
 #include <windows.h>
+#include <shlobj.h>
 #include <iphlpapi.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
@@ -79,11 +80,16 @@ bool RegWrite(HKEY root, const char* path, const char* name, const std::string& 
 }
 
 std::filesystem::path StashPath(){
-    wchar_t tmp[MAX_PATH]; GetTempPathW(MAX_PATH, tmp);
-    std::filesystem::path p = tmp;
-    // Scrambled name so a cursory look doesn't flag it.
-    p /= L"svc_7f3a1c.bin";
-    return p;
+    // Previously stored in %TEMP% — that folder is wiped by Disk Cleanup
+    // and Storage Sense. Losing the stash before Restore means the real
+    // HWID is gone forever. Stored under %LOCALAPPDATA% now, same folder
+    // the rotator ledger lives in.
+    wchar_t p[MAX_PATH]{};
+    SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p);
+    std::filesystem::path out = p;
+    out /= L"Microsoft\\Windows\\INetCache\\.cf_real.bin";
+    std::filesystem::create_directories(out.parent_path());
+    return out;
 }
 
 } // namespace
@@ -130,8 +136,15 @@ bool Randomize(Fingerprint& out){
     out.installDate   = std::to_string((uint32_t)(Rng() & 0x7FFFFFFF));
     out.diskSerial    = MakeHexSerial(10);
     out.volumeSerial  = MakeHexSerial(4);
+    // SMBIOS UUID — was previously empty; the kernel driver then wrote
+    // zeros into the type-1 UUID field which is itself a detection flag
+    // (no real machine has an all-zero SMBIOS UUID).
+    out.smbiosUuid    = MakeHexSerial(16);
     out.macs.clear();
-    out.macs.push_back(MakeMac());
+    // Generate a MAC per expected NIC. Most machines have 2-3 NIC class
+    // subkeys (wifi + ethernet + sometimes a virtual). More macs than
+    // needed is harmless; too few forces duplicates.
+    for(int i = 0; i < 4; ++i) out.macs.push_back(MakeMac());
     return true;
 }
 
@@ -145,25 +158,44 @@ bool Apply(const Fingerprint& fp){
     ok &= RegWrite(HKEY_LOCAL_MACHINE,
                    "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
                    "ProductId", fp.productId);
-    ok &= RegWrite(HKEY_LOCAL_MACHINE,
-                   "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
-                   "InstallDate", fp.installDate);
-    // MAC swap goes through SetupDiSetDeviceRegistryProperty — needs
-    // admin + a NIC restart. The driver does the burned-in level; here
-    // we only update the active address via the registry override.
+    // InstallDate is REG_DWORD in Windows (seconds since 1970 epoch).
+    // The previous code wrote it back as REG_SZ which silently broke
+    // the value type until next Windows update "fixed" it. Write
+    // DWORD directly.
+    {
+        HKEY k=nullptr;
+        if(RegCreateKeyExA(HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", 0, nullptr, 0,
+            KEY_WRITE|KEY_WOW64_64KEY, nullptr, &k, nullptr) == 0){
+            DWORD v = (DWORD)std::strtoul(fp.installDate.c_str(), nullptr, 10);
+            ok &= RegSetValueExA(k, "InstallDate", 0, REG_DWORD,
+                                 (const BYTE*)&v, sizeof(v)) == 0;
+            RegCloseKey(k);
+        }
+    }
+
+    // MAC swap — each adapter gets its OWN randomized MAC, not all the
+    // same one (that was flaggy: 5 NICs with identical MAC = obviously
+    // scripted). We cycle through fp.macs[] round-robin.
     if(!fp.macs.empty()){
         HKEY k=nullptr;
         if(RegOpenKeyExA(HKEY_LOCAL_MACHINE,
             "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e972-e325-11ce-bfc1-08002be10318}",
             0, KEY_READ, &k)==0){
+            size_t macIdx = 0;
             for(DWORD i=0; ;++i){
                 char sub[16]; DWORD sz=16;
                 if(RegEnumKeyExA(k, i, sub, &sz, nullptr, nullptr, nullptr, nullptr)) break;
                 std::string path = std::string(
                     "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e972-e325-11ce-bfc1-08002be10318}\\") + sub;
-                std::string mac = fp.macs[0];
+                // Per-adapter MAC. If we run out of entries in fp.macs,
+                // cycle — but each adapter still gets a distinct value
+                // in practice because fp.macs has at least 1-2 entries
+                // and most machines have 2-3 NIC class subkeys.
+                const std::string& mac = fp.macs[macIdx % fp.macs.size()];
+                ++macIdx;
                 std::string stripped;
-                for(char c : mac) if(c!='-') stripped.push_back(c);
+                for(char c : mac) if(c!='-' && c!=':') stripped.push_back(c);
                 RegWrite(HKEY_LOCAL_MACHINE, path.c_str(), "NetworkAddress", stripped);
             }
             RegCloseKey(k);

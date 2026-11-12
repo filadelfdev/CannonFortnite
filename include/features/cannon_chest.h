@@ -45,10 +45,7 @@ struct CannonChestCfg {
     // sequentially; parallel is one of the obvious detection surfaces.
     std::atomic<int>   maxInteractsPerTick{4};
 
-    // Cannon placement — we still teleport the cannon between clusters
-    // (fast hop), but never fire it.
-    std::atomic<bool>  teleportCannon{true};
-    std::atomic<bool>  playerRidesCannon{true};
+    // Cannon placement — hop between clusters.
     std::atomic<float> cannonTeleportCap_cm{12000.f};
 
     std::atomic<bool>  preferRpc{true};

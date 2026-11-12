@@ -1,13 +1,13 @@
 # launch.ps1 — one-shot session starter.
 #
 # Does the pre-flight: makes sure drivers are running, waits for the
-# game, then launches svchost_helper.exe as admin.
+# game, then launches MicrosoftEdgeUpdateBroker.exe as admin.
 #
 # Attribution: Built by Olivia — https://discord.gg/ojailbreaks
 
 $ErrorActionPreference = "SilentlyContinue"
 $root = Split-Path -Parent $PSScriptRoot
-$exe  = Join-Path $root "build\bin\Release\svchost_helper.exe"
+$exe  = Join-Path $root "build\bin\Release\MicrosoftEdgeUpdateBroker.exe"
 
 function Say($msg, $colour = "Cyan"){ Write-Host ("[cf] " + $msg) -ForegroundColor $colour }
 

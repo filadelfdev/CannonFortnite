@@ -21,22 +21,45 @@ int Apply(){
     if(!cf::spoof::rot::LoadLedger(ledger)){
         cf::spoofer::util::Info("seeding new ledger (32 slots)");
         cf::spoof::rot::Seed(ledger, 32);
-        cf::spoof::rot::SaveLedger(ledger);
+        if(!cf::spoof::rot::SaveLedger(ledger)){
+            cf::spoofer::util::Err("could not save new ledger — check write perms");
+            return 2;
+        }
     }
     cf::spoof::Fingerprint fp{};
     if(!cf::spoof::rot::PickNext(ledger, fp)){
         cf::spoofer::util::Err("no clean slot left — ledger exhausted");
         return 2;
     }
-    if(!cf::spoof::StashReal())
-        cf::spoofer::util::Warn("couldn't stash real HWID — restore may be incomplete");
+
+    // IMPORTANT: stash the REAL HWID BEFORE any Apply writes happen,
+    // and only if no marker already exists (i.e. the stash would overwrite
+    // an already-spoofed state with the spoofed values → would lose the
+    // true originals forever).
+    if(!cf::spoofer::marker::Exists()){
+        if(!cf::spoof::StashReal()){
+            cf::spoofer::util::Err("couldn't stash real HWID — refusing to apply");
+            return 3;
+        }
+    } else {
+        cf::spoofer::util::Warn("marker already exists — skipping StashReal to protect original backup");
+    }
 
     bool um = cf::spoof::Apply(fp);
     bool kr = cf::spoof::ApplyKernel(fp);
-    cf::spoof::rot::SaveLedger(ledger);
+    if(!cf::spoof::rot::SaveLedger(ledger)){
+        cf::spoofer::util::Warn("ledger save failed — slot progression not persisted");
+    }
 
-    uint64_t fpHash = cf::spoofer::util::fnv1a(fp.machineGuid.c_str());
-    cf::spoofer::marker::Write(cf::spoof::rot::CurrentSlotIndex(), fpHash);
+    // ONLY write the marker when at least the user-mode leg succeeded —
+    // otherwise other tools (the cheat) will believe a spoof is live
+    // when nothing changed on disk.
+    if(um){
+        uint64_t fpHash = cf::spoofer::util::fnv1a(fp.machineGuid.c_str());
+        cf::spoofer::marker::Write(cf::spoof::rot::CurrentSlotIndex(), fpHash);
+    } else {
+        cf::spoofer::util::Err("user-mode Apply FAILED — marker NOT written");
+    }
 
     cf::spoofer::util::Info("slot %d applied (user-mode=%s, kernel=%s)",
                             cf::spoof::rot::CurrentSlotIndex(),
@@ -76,11 +99,20 @@ int Burn(){
         return 3;
     }
     ledger[m.slot].burned = true;
-    cf::spoof::rot::SaveLedger(ledger);
+    if(!cf::spoof::rot::SaveLedger(ledger)){
+        cf::spoofer::util::Warn("ledger save failed — burned state not persisted");
+    }
+
+    // Restore the real HWID first so burn+apply doesn't layer a second
+    // spoof on top of the previous one (otherwise the StashReal inside
+    // Apply refuses to run, and Restore later writes back burned values
+    // thinking they are the originals).
+    cf::spoof::RestoreReal();
     cf::spoofer::marker::Delete();
-    cf::spoofer::util::Info("slot %d marked BURNED. clean remaining: %d",
+
+    cf::spoofer::util::Info("slot %d marked BURNED + real HWID restored. clean remaining: %d",
                             m.slot, cf::spoof::rot::RemainingClean(ledger));
-    cf::spoofer::util::Info("run `spoofer apply` for a fresh slot + reboot.");
+    cf::spoofer::util::Info("REBOOT, then run `spoofer apply` for the next slot.");
     return 0;
 }
 

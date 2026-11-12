@@ -34,13 +34,45 @@ static BOOLEAN    g_armed = FALSE;
 // The anti-cheat driver reads it via ZwQuerySystemInformation(SystemFirmwareTable).
 // We flip the UUID field inside the type-1 row during a copy-out hook.
 
+// Convert the 32-char hex SMBIOS UUID string the user-mode caller
+// provides into its 16-byte binary form expected by the SMBIOS spec.
+// Returns FALSE if the input isn't a valid 32-hex-digit string.
+static BOOLEAN HexStringToUuid16(const CHAR* s, UCHAR Out[16]){
+    SIZE_T written = 0;
+    for(SIZE_T i = 0; i < 64 && written < 16; ++i){
+        CHAR a = s[i];
+        if(a == 0) break;
+        CHAR b = s[i+1];
+        if(b == 0) return FALSE;
+        UCHAR hi, lo;
+        if      (a >= '0' && a <= '9') hi = (UCHAR)(a - '0');
+        else if (a >= 'a' && a <= 'f') hi = (UCHAR)(a - 'a' + 10);
+        else if (a >= 'A' && a <= 'F') hi = (UCHAR)(a - 'A' + 10);
+        else continue;   // skip separators like '-'
+        if      (b >= '0' && b <= '9') lo = (UCHAR)(b - '0');
+        else if (b >= 'a' && b <= 'f') lo = (UCHAR)(b - 'a' + 10);
+        else if (b >= 'A' && b <= 'F') lo = (UCHAR)(b - 'A' + 10);
+        else continue;
+        Out[written++] = (UCHAR)((hi << 4) | lo);
+        ++i;   // consumed two chars
+    }
+    return (BOOLEAN)(written == 16);
+}
+
 static VOID PatchSmbios(PUCHAR Table, SIZE_T Len){
     if(!g_armed) return;
+    UCHAR uuidBin[16];
+    if(!HexStringToUuid16(g_pay.SmbiosUuid, uuidBin)) return;
+
     for(SIZE_T i=0; i+0x1C < Len; ){
         UCHAR type = Table[i];
         UCHAR hdr  = Table[i+1];
         if(type == 1 && hdr >= 0x1A){
-            RtlCopyMemory(Table + i + 0x08, g_pay.SmbiosUuid, 16);
+            // SMBIOS type-1 UUID is a 16-byte binary field at +0x08,
+            // NOT a 32-character hex string. The old code copied the
+            // ASCII bytes of the hex string there, which looked random
+            // but was invalid UUID data.
+            RtlCopyMemory(Table + i + 0x08, uuidBin, 16);
         }
         // skip header + strings (null-null terminated)
         SIZE_T j = i + hdr;

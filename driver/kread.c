@@ -18,15 +18,7 @@
 #include <ntddk.h>
 #include <wdm.h>
 #include <ntstrsafe.h>
-
-#define CF_ARM         CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1000, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_READ        CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1001, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_WRITE       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1002, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_BATCH       CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1003, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_INVOKE      CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1004, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_ALLOC_RWX   CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1008, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_FREE_RWX    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x1009, METHOD_NEITHER, FILE_ANY_ACCESS)
-#define CF_PATCH_QWORD CTL_CODE(FILE_DEVICE_UNKNOWN, 0x100A, METHOD_NEITHER, FILE_ANY_ACCESS)
+#include "cf_ioctl.h"
 
 typedef struct _REQ_WIRE {
     ULONG64 Src;
@@ -43,6 +35,10 @@ NTKERNELAPI NTSTATUS MmCopyVirtualMemory(
 
 NTKERNELAPI PCHAR PsGetProcessImageFileName(PEPROCESS);
 NTKERNELAPI PPEB  PsGetProcessPeb(PEPROCESS);
+
+// SeLocateProcessImageName returns the full UNICODE_STRING image path —
+// unlike PsGetProcessImageFileName which is clipped to 15 ANSI chars.
+NTKERNELAPI NTSTATUS SeLocateProcessImageName(PEPROCESS, PUNICODE_STRING*);
 
 NTKERNELAPI NTSTATUS ZwAllocateVirtualMemory(
     HANDLE ProcessHandle, PVOID* BaseAddress, ULONG_PTR ZeroBits,
@@ -77,15 +73,42 @@ static ULONG64 Fnv1a(const CHAR* s){
     return h;
 }
 
+// Hash a UNICODE_STRING's base name (strip path), lowercased, as if the
+// user-mode caller had done fnv1a on the full .exe filename.
+static ULONG64 Fnv1aUnicodeBaseName(PCUNICODE_STRING us){
+    if(!us || !us->Buffer || us->Length == 0) return 0;
+    USHORT chars = us->Length / sizeof(WCHAR);
+    USHORT start = 0;
+    for(USHORT i = 0; i < chars; ++i){
+        if(us->Buffer[i] == L'\\' || us->Buffer[i] == L'/') start = i + 1;
+    }
+    ULONG64 h = 0xcbf29ce484222325ULL;
+    for(USHORT i = start; i < chars; ++i){
+        WCHAR w = us->Buffer[i];
+        CHAR c = (CHAR)(w & 0xFF);
+        if(c >= 'A' && c <= 'Z') c = (CHAR)(c + 32);
+        h ^= (UCHAR)c; h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
 static NTSTATUS ResolveTarget(ULONG64 hash){
-    // Walk the kernel process list via PsLookupProcessByProcessId with
-    // short PIDs up to a cap — safer than walking PsActiveProcessHead
-    // without a public offset.
+    // Walk the kernel process list via PsLookupProcessByProcessId.
+    // Match the full image basename (SeLocateProcessImageName) — the
+    // short PsGetProcessImageFileName is capped at 15 ANSI chars, so
+    // "FortniteClient-Win64-Shipping.exe" would never match a user-
+    // mode fnv1a hash of the full name.
     for(ULONG pid = 4; pid < 0x30000; pid += 4){
         PEPROCESS proc = NULL;
         if(!NT_SUCCESS(PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)pid, &proc))) continue;
-        PCHAR name = PsGetProcessImageFileName(proc);
-        if(name && Fnv1a(name) == hash){
+
+        PUNICODE_STRING fullName = NULL;
+        ULONG64 h = 0;
+        if(NT_SUCCESS(SeLocateProcessImageName(proc, &fullName)) && fullName){
+            h = Fnv1aUnicodeBaseName(fullName);
+            ExFreePool(fullName);
+        }
+        if(h == hash){
             if(g_target) ObDereferenceObject(g_target);
             g_target = proc;
             return STATUS_SUCCESS;
@@ -191,7 +214,9 @@ static NTSTATUS CfControl(PDEVICE_OBJECT dev, PIRP irp){
     __except(EXCEPTION_EXECUTE_HANDLER){ st = STATUS_ACCESS_VIOLATION; }
 
     irp->IoStatus.Status = st;
-    irp->IoStatus.Information = 0;
+    // Note: DO NOT zero Information here — ALLOC_RWX set it to the size
+    // of REPLY_ALLOC above and overwriting it with 0 would lose the
+    // bytes-written count the caller reads.
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     return st;
 }

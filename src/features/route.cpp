@@ -43,7 +43,9 @@ uint32_t ChestWeight(const Actor& a){
 
 void OpenChestRaw(uintptr_t chest){
     uint8_t flag = 1;
-    cf::mem::Write(chest + cf::off::Chest_bAlreadySearched, &flag, 1);
+    // Guard: only count the open if the write actually landed. A failed
+    // write (unmapped page, process exit) must not credit the counter.
+    if(!cf::mem::Write(chest + cf::off::Chest_bAlreadySearched, &flag, 1)) return;
     float bounce[4] = { 1.f, 0.f, 0.f, 0.f };
     cf::mem::Write(chest + cf::off::Chest_SearchBounceData, bounce, sizeof(bounce));
     g_looted.fetch_add(1);
