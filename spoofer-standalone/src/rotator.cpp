@@ -1,6 +1,8 @@
-#include "spoofer/rotator.h"
-#include "antiban/jitter.h"
-#include "util/log.h"
+#include "rotator.h"
+#include "util.h"
+#define CF_INFO(...) cf::spoofer::util::Info(__VA_ARGS__)
+#define CF_WARN(...) cf::spoofer::util::Warn(__VA_ARGS__)
+#define CF_ERR(...)  cf::spoofer::util::Err(__VA_ARGS__)
 
 #include <windows.h>
 #include <bcrypt.h>

@@ -30,9 +30,11 @@
 #include "antiban/env_lie.h"
 #include "antiban/dxgi_cloak.h"
 #include "antiban/dxgi_kernel.h"
-#include "spoofer/spoofer.h"
-#include "spoofer/rotator.h"
 #include "util/log.h"
+#include <fstream>
+#include <ctime>
+#include <string>
+#include <shlobj.h>
 
 #include <windows.h>
 #include <thread>
@@ -152,17 +154,59 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     cf::ab::ZeroOwnHeader();
     cf::ab::HideSelfThreads();
 
-    // HWID rotation — one fresh fingerprint per session from the ledger.
-    std::vector<cf::spoof::rot::Slot> ledger;
-    if(!cf::spoof::rot::LoadLedger(ledger)){
-        cf::spoof::rot::Seed(ledger, 32);
-        cf::spoof::rot::SaveLedger(ledger);
-        CF_INFO("hwid ledger seeded (32 slots)");
+    // HWID spoofer was split into a standalone binary (CannonSpoofer).
+    // We ONLY read its marker here; the cheat never applies HWID itself.
+    // If no marker is present, warn loud — running without a spoof is
+    // the single fastest way to burn your real HWID.
+    //
+    // Marker path: %LOCALAPPDATA%\Microsoft\Windows\INetCache\.cf_spoof.marker
+    //              (written by spoof-apply.exe from the standalone repo)
+    {
+        std::ifstream mf([]{
+            wchar_t p[MAX_PATH]{};
+            SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p);
+            std::wstring s = p;
+            s += L"\\Microsoft\\Windows\\INetCache\\.cf_spoof.marker";
+            return s;
+        }().c_str(), std::ios::binary);
+        if(!mf){
+            CF_ERR("==========================================================");
+            CF_ERR(" SPOOFER NOT DETECTED");
+            CF_ERR(" Run CannonSpoofer\\spoof-apply.exe AS ADMIN first, reboot,");
+            CF_ERR(" THEN launch this cheat. Running without it = HWID burn risk.");
+            CF_ERR("==========================================================");
+        } else {
+            struct { uint32_t magic; uint32_t ver; int32_t slot; int32_t pad;
+                     int64_t appliedUnix; uint64_t fpHash; } b{};
+            mf.read((char*)&b, sizeof(b));
+            if(b.magic == 0xCF50F000){
+                int64_t ageH = (std::time(nullptr) - b.appliedUnix) / 3600;
+                CF_INFO("spoofer marker: slot %d, applied %lld h ago", b.slot, (long long)ageH);
+            } else {
+                CF_WARN("spoofer marker present but corrupt — rerun spoof-apply");
+            }
+        }
     }
-    cf::spoof::Fingerprint fp{};
-    if(cf::spoof::rot::PickNext(ledger, fp)){
-        cf::spoof::Apply(fp);
-        cf::spoof::ApplyKernel(fp);
+    {
+        // Keep the DXGI cloak fed. Pick the SAME slot the spoofer picked
+        // (via marker) so GPU identity rotates with the HWID.
+        // For now we re-derive from a hash of the marker's slot number.
+        uint32_t seed = 0xDEADBEEF;
+        {
+            std::ifstream mf([]{
+                wchar_t p[MAX_PATH]{};
+                SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p);
+                std::wstring s = p;
+                s += L"\\Microsoft\\Windows\\INetCache\\.cf_spoof.marker";
+                return s;
+            }().c_str(), std::ios::binary);
+            if(mf){
+                struct { uint32_t magic; uint32_t ver; int32_t slot; int32_t pad;
+                         int64_t appliedUnix; uint64_t fpHash; } b{};
+                mf.read((char*)&b, sizeof(b));
+                if(b.magic == 0xCF50F000) seed = (uint32_t)(b.fpHash ^ (uint64_t)b.slot);
+            }
+        }
         // v5: feed DXGI cloak a deterministic adapter identity
         // derived from the slot so the GPU identity rotates with HWID.
         // GPU list tuned for a mid-low-tier host (RX 580 class). All
@@ -192,13 +236,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
         int pick = (int)(seed % (sizeof(gpus)/sizeof(gpus[0])));
         cf::ab::dxgi::SetReportedAdapter("GPU", gpus[pick],
             ids[pick][0], ids[pick][1], ids[pick][2], ids[pick][3]);
-        cf::spoof::rot::SaveLedger(ledger);
-        CF_INFO("hwid rotated: %d clean slots remain · gpu=%s",
-                cf::spoof::rot::RemainingClean(ledger), gpus[pick]);
+        CF_INFO("gpu cloak pick: %s (from spoofer marker seed)", gpus[pick]);
 
-        // Stash the picked GPU for the kernel-side cloak install that
-        // happens after attach (dxgi_kernel::InstallInTarget needs the
-        // fp struct built from the same slot).
         static cf::ab::dxgi_k::Fingerprint s_kfp;
         size_t slen = 0;
         while(slen < 127 && gpus[pick][slen]) ++slen;
@@ -273,7 +312,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     }
 
     // Spoofer — stash the real fingerprint so panic restores on exit.
-    cf::spoof::StashReal();
+    // (spoofer is a separate binary now — no StashReal here)
 
     std::thread worker(WorkerLoop);
 
@@ -289,7 +328,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
     cf::ab::StopHeartbeat();
     cf::kmem::Close();
     cf::mem::Detach();
-    cf::spoof::RestoreReal();
+    // (spoofer standalone handles RestoreReal via spoof-restore.exe)
     CF_INFO("cf :: shutdown rc=%d opened=%u", rc, cf::feat::Looted());
     return rc;
 }

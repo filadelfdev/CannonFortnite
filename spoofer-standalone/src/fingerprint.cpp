@@ -1,6 +1,8 @@
-#include "spoofer/spoofer.h"
-#include "antiban/hash.h"
-#include "util/log.h"
+#include "fingerprint.h"
+#include "util.h"
+#define CF_INFO(...) cf::spoofer::util::Info(__VA_ARGS__)
+#define CF_WARN(...) cf::spoofer::util::Warn(__VA_ARGS__)
+#define CF_ERR(...)  cf::spoofer::util::Err(__VA_ARGS__)
 
 #include <windows.h>
 #include <iphlpapi.h>

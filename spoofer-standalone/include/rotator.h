@@ -1,5 +1,5 @@
 #pragma once
-#include "spoofer/spoofer.h"
+#include "fingerprint.h"
 #include <string>
 #include <vector>
 

@@ -13,8 +13,11 @@
 #include "antiban/env_lie.h"
 #include "antiban/dxgi_cloak.h"
 #include "antiban/dxgi_kernel.h"
-#include "spoofer/rotator.h"
 #include "util/report.h"
+#include <fstream>
+#include <ctime>
+#include <string>
+#include <shlobj.h>
 #include "util/log.h"
 
 #include <windows.h>
@@ -390,20 +393,35 @@ void PageSecurity(){
 
     ImGui::Dummy(ImVec2(0, 8));
 
-    int cur   = cf::spoof::rot::CurrentSlotIndex();
-    int total = cf::spoof::rot::TotalSlots();
-    int clean = cf::spoof::rot::CleanRemaining();
-    std::snprintf(buf, 160, "hwid rotator: slot %d of %d  ·  %d clean remaining",
-                  cur, total, clean);
-    ImGui::TextUnformatted(buf);
+    // HWID state — read the marker written by the standalone spoofer.
+    // The cheat never touches HWID itself anymore.
+    int slot = -1; double ageH = -1;
+    {
+        wchar_t p[MAX_PATH]{}; SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p);
+        std::wstring path = p;
+        path += L"\\Microsoft\\Windows\\INetCache\\.cf_spoof.marker";
+        std::ifstream mf(path.c_str(), std::ios::binary);
+        if(mf){
+            struct { uint32_t magic; uint32_t ver; int32_t s; int32_t pad;
+                     int64_t appliedUnix; uint64_t fpHash; } b{};
+            mf.read((char*)&b, sizeof(b));
+            if(b.magic == 0xCF50F000){
+                slot = b.s;
+                ageH = (std::time(nullptr) - b.appliedUnix) / 3600.0;
+            }
+        }
+    }
+    if(slot >= 0){
+        std::snprintf(buf, 160, "spoofer marker: slot %d · aplicado %.1fh atrás",
+                      slot, ageH);
+        ImGui::TextUnformatted(buf);
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
+        ImGui::TextWrapped("SPOOFER NÃO DETECTADO — rode CannonSpoofer\\spoof-apply.exe primeiro.");
+        ImGui::PopStyleColor();
+    }
 
     ImGui::Dummy(ImVec2(0, 4));
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.80f, 0.17f, 0.17f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.22f, 0.22f, 1.f));
-    if(ImGui::Button("burn current slot (took a ban)")){
-        cf::spoof::rot::MarkCurrentBurnedPersist();
-    }
-    ImGui::PopStyleColor(2);
     ImGui::SameLine();
     if(ImGui::Button("reset counter")){
         cf::feat::ResetSmashCounter();
