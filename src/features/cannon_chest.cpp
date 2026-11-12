@@ -28,7 +28,7 @@ struct PendingConfirm {
 
 struct Pipeline {
     uintptr_t activeCannon{};
-    double    lastInteractTime{};
+    double    lastFireTime{};
     std::atomic<uint32_t> smashed{0};
     std::vector<ChestVisual> visualSnap;
     std::vector<uintptr_t>   prequeue;
@@ -55,7 +55,9 @@ void FlagChestSearched(uintptr_t chest){
     cf::mem::Write(chest + cf::off::Chest_SearchBounceData, bounce, sizeof(bounce));
 }
 
-// Move the cannon toward a cluster of chests. Uses vehicle envelope.
+// Teleport cannon + player (together, because playerRidesCannon) to a
+// cluster center. Called ONLY when hopping between clusters — never
+// during a burst.
 void WarpCannonToCluster(const LocalPlayerCache& lp,
                          uintptr_t cannon,
                          const FVector& clusterCenter){
@@ -74,6 +76,7 @@ void WarpCannonToCluster(const LocalPlayerCache& lp,
     FVector zero{};
     cf::mem::Write(cannonRoot + cf::off::Scene_ComponentVelocity, &zero, sizeof(FVector));
 
+    // Player rides the cannon → drag the pawn along with it.
     if(g_cfg.playerRidesCannon.load() && lp.rootComp){
         FVector seat = next;
         seat.z += 80.f;
@@ -82,14 +85,47 @@ void WarpCannonToCluster(const LocalPlayerCache& lp,
     }
 }
 
-// Invoke ServerInteract on one chest via RPC path. Falls through to
-// direct write of the search flag if RPC isn't resolved.
-void InteractChest(uintptr_t chest, uintptr_t pawn){
-    if(g_cfg.preferRpc.load() && cf::ab::rpc::Ready()){
-        cf::ab::rpc::ChestServerInteract(chest, pawn);
-    } else {
-        FlagChestSearched(chest);
-    }
+// Compute aim to look at a chest from cannon position. The chest isn't
+// usually below the cannon (we hover above, aim roughly down+toward).
+FRotator LookAt(const FVector& from, const FVector& to){
+    FVector d = to - from;
+    float dist2D = std::sqrt(d.x*d.x + d.y*d.y);
+    FRotator r;
+    r.pitch = std::atan2(d.z, dist2D) * 57.29578f;
+    r.yaw   = std::atan2(d.y, d.x)    * 57.29578f;
+    r.roll  = 0.f;
+    return r;
+}
+
+// Fire one shot at a specific chest. Writes aim + launch power + zeros
+// the client-side cooldown so the next tick can fire again. This is
+// the "no cooldown" trick the reference cheat uses.
+void FireAtChest(uintptr_t cannon,
+                 const FVector& cannonPos,
+                 const FVector& chestPos){
+    uintptr_t root = cf::mem::R<uintptr_t>(cannon + cf::off::Pawn_RootComponent);
+    if(!root) return;
+
+    FRotator aim = LookAt(cannonPos, chestPos);
+    // tiny wobble on both axes so N consecutive aims aren't bit-identical.
+    aim.pitch += cf::ab::jitter::wobble(0.f, g_cfg.aimJitterDeg.load());
+    aim.yaw   += cf::ab::jitter::wobble(0.f, g_cfg.aimJitterDeg.load());
+
+    cf::mem::Write(root + cf::off::Scene_RelativeRotation, &aim, sizeof(aim));
+    cf::mem::Write(cannon + cf::off::Cannon_FireAngle, &aim.pitch, sizeof(float));
+
+    // Launch power scaled to distance so the ball lands on the chest
+    // in one tick (no wasted projectile travel time).
+    float dist = (chestPos - cannonPos).Len();
+    float muzzle = std::max(1200.f, std::min(9000.f, dist * 2.5f));
+    cf::mem::Write(cannon + cf::off::Cannon_LaunchPower, &muzzle, sizeof(float));
+
+    // Zero out LastFiredTime — the key to "no cooldown". The vehicle
+    // tick reads this, sees it's 0, allows another fire instantly.
+    float zero = 0.f;
+    cf::mem::Write(cannon + cf::off::Cannon_LastFiredTime, &zero, sizeof(float));
+    uint8_t canFire = 1;
+    cf::mem::Write(cannon + cf::off::Cannon_bCanFire, &canFire, 1);
 }
 
 uintptr_t PickNearestCannon(const LocalPlayerCache& lp,
@@ -105,30 +141,24 @@ uintptr_t PickNearestCannon(const LocalPlayerCache& lp,
     return best;
 }
 
-// Find the chest cluster with the most unlooted chests inside
-// interactRadius_cm. Returns the geometric center + list of chest
-// addrs for this tick's bulk interact.
+// Pick the densest cluster of unlooted chests in range. Returns center
+// of cluster + the list of chests inside it.
 FVector PickBestCluster(const std::vector<Actor>& actors,
-                        float searchRadius_cm,
                         std::vector<uintptr_t>& outChests){
     outChests.clear();
     const float r2 = g_cfg.interactRadius_cm.load() * g_cfg.interactRadius_cm.load();
 
-    // Candidate centers: every unlooted chest's own position.
     int bestCount = 0;
     FVector bestCenter{};
     std::vector<uintptr_t> bestList;
-    bestList.reserve(16);
 
     for(auto& candidate : actors){
         if(candidate.isVaultChest) continue;
         if(!candidate.isChest) continue;
         if(g_cfg.skipLootedChests.load() && IsChestLooted(candidate.addr)) continue;
 
-        // Count other unlooted chests within interactRadius of this one.
         int count = 0;
         std::vector<uintptr_t> here;
-        here.reserve(16);
         for(auto& other : actors){
             if(other.isVaultChest) continue;
             if(!other.isChest) continue;
@@ -139,16 +169,12 @@ FVector PickBestCluster(const std::vector<Actor>& actors,
                 count++;
             }
         }
-
         if(count > bestCount){
             bestCount  = count;
             bestCenter = candidate.pos;
             bestList   = std::move(here);
         }
-
-        (void)searchRadius_cm;
     }
-
     outChests = std::move(bestList);
     return bestCenter;
 }
@@ -178,7 +204,6 @@ std::vector<ChestVisual> GetVisualState(){
     std::scoped_lock _(p.visLock);
     return p.visualSnap;
 }
-
 uint32_t SmashedThisSession(){ return p.smashed.load(); }
 void     ResetSmashCounter(){ p.smashed.store(0); }
 
@@ -187,17 +212,17 @@ void ApplySpeedPreset(int level){
     if(level > 10) level = 10;
 
     struct Preset {
-        float cooldownMs;   int perTick;   float warpCap;   float interactRadius;
+        float cooldownMs;   int perTick;   float warpCap;   float clusterRadius;
     };
     static const Preset table[10] = {
-        //  cooldown   per-tick   warp cap     interact radius
+        //  cooldown   per-tick   warp cap     cluster radius
         { 900.f,       1,         4000.f,      500.f   },  // 1 — safest, ~1/s
         { 650.f,       1,         6000.f,      600.f   },  // 2
         { 480.f,       2,         7500.f,      700.f   },  // 3
         { 360.f,       2,         9000.f,      800.f   },  // 4
-        { 280.f,       3,        10500.f,      850.f   },  // 5
-        { 230.f,       3,        11500.f,      900.f   },  // 6
-        { 190.f,       4,        12000.f,      900.f   },  // 7 — v6 default
+        { 280.f,       3,        10500.f,      850.f   },  // 5 — ~3/s
+        { 230.f,       3,        11500.f,      900.f   },  // 6 — ~4/s
+        { 190.f,       4,        12000.f,      900.f   },  // 7 — ~5/s default
         { 150.f,       5,        14000.f,     1000.f   },  // 8
         { 120.f,       6,        17000.f,     1100.f   },  // 9
         {  95.f,       8,        22000.f,     1300.f   },  // 10 — unsafe
@@ -206,7 +231,7 @@ void ApplySpeedPreset(int level){
     g_cfg.cooldownMeanMs.store(pr.cooldownMs);
     g_cfg.maxInteractsPerTick.store(pr.perTick);
     g_cfg.cannonTeleportCap_cm.store(pr.warpCap);
-    g_cfg.interactRadius_cm.store(pr.interactRadius);
+    g_cfg.interactRadius_cm.store(pr.clusterRadius);
     g_cfg.speedPreset.store(level);
 }
 
@@ -218,7 +243,7 @@ void Tick(const LocalPlayerCache& lp,
 
     ProcessPending();
 
-    // Active cannon lock.
+    // Lock active cannon.
     if(!p.activeCannon){
         p.activeCannon = PickNearestCannon(lp, actors, g_cfg.maxRange_m.load());
         if(!p.activeCannon) return;
@@ -228,12 +253,16 @@ void Tick(const LocalPlayerCache& lp,
         if(!still){ p.activeCannon = 0; return; }
     }
 
-    // Find the richest chest cluster in range.
+    uintptr_t cannonRoot = cf::mem::R<uintptr_t>(p.activeCannon + cf::off::Pawn_RootComponent);
+    if(!cannonRoot){ p.activeCannon = 0; return; }
+    FVector cannonPos = cf::mem::R<FVector>(cannonRoot + cf::off::Scene_RelativeLocation);
+
+    // Find densest cluster of unlooted chests.
     std::vector<uintptr_t> cluster;
-    FVector clusterCenter = PickBestCluster(actors, g_cfg.maxRange_m.load()*100.f, cluster);
+    FVector clusterCenter = PickBestCluster(actors, cluster);
     if(cluster.empty()) return;
 
-    // Visual snapshot (first N chests of the cluster become "queued").
+    // Visual snapshot.
     {
         std::vector<ChestVisual> snap;
         snap.reserve(actors.size());
@@ -250,31 +279,44 @@ void Tick(const LocalPlayerCache& lp,
         p.visualSnap = std::move(snap);
     }
 
-    // Move the cannon above the cluster center (brings the player too
-    // via playerRidesCannon). No fire — the cannon is just the vehicle.
-    if(g_cfg.teleportCannon.load()){
-        WarpCannonToCluster(lp, p.activeCannon, clusterCenter);
+    // Hop or burst? If the cannon is far from the cluster center, HOP
+    // (cannon + player teleport together, playerRidesCannon). If the
+    // cannon is already at the cluster, start the BURST — cannon stays
+    // put, aim rotates between chests, zero-cooldown fire each tick.
+    float distToCluster = (cannonPos - clusterCenter).Len();
+    constexpr float kBurstDistance_cm = 600.f;   // "we are here" threshold
+
+    if(distToCluster > kBurstDistance_cm){
+        if(g_cfg.teleportCannon.load()){
+            WarpCannonToCluster(lp, p.activeCannon, clusterCenter);
+        }
+        return;   // let the warp settle, burst starts next tick
     }
 
-    // Jittered inter-arrival. Each interact call still passes through
-    // the gate so parallel-per-tick doesn't collapse to a clean burst.
+    // BURST — cannon parked, rotate aim between chests in the cluster.
     double now = NowSec();
     const double sigma = 0.30;
-    int interactsThisTick = 0;
+    int shotsThisTick = 0;
     const int cap = g_cfg.maxInteractsPerTick.load();
 
     for(uintptr_t chest : cluster){
-        if(interactsThisTick >= cap) break;
-        if(!cf::ab::jitter::shouldFireLognormal(now, p.lastInteractTime,
+        if(shotsThisTick >= cap) break;
+        if(IsChestLooted(chest)) continue;
+
+        if(!cf::ab::jitter::shouldFireLognormal(now, p.lastFireTime,
                                                 g_cfg.cooldownMeanMs.load(),
                                                 sigma)){
             break;
         }
 
-        // Fire the interact RPC.
-        InteractChest(chest, lp.pawn);
+        uintptr_t chestRoot = cf::mem::R<uintptr_t>(chest + cf::off::Pawn_RootComponent);
+        if(!chestRoot) continue;
+        FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
+
+        // Fire at THIS chest (aim rotation + launch write + zero cooldown).
+        FireAtChest(p.activeCannon, cannonPos, chestPos);
         p.pending.push_back({chest, now});
-        ++interactsThisTick;
+        ++shotsThisTick;
 
         int lim = g_cfg.chestsPerSession.load();
         if(lim > 0 && (int)p.smashed.load() >= lim){
