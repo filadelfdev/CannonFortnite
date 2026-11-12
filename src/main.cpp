@@ -172,7 +172,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int){
         if(!mf){
             CF_ERR("==========================================================");
             CF_ERR(" SPOOFER NOT DETECTED");
-            CF_ERR(" Run CannonSpoofer\\spoof-apply.exe AS ADMIN first, reboot,");
+            CF_ERR(" Run CannonSpoofer\\spoofer.exe → [1] apply, as admin, reboot,");
             CF_ERR(" THEN launch this cheat. Running without it = HWID burn risk.");
             CF_ERR("==========================================================");
         } else {

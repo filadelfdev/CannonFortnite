@@ -417,7 +417,7 @@ void PageSecurity(){
         ImGui::TextUnformatted(buf);
     } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.4f, 0.4f, 1.f));
-        ImGui::TextWrapped("SPOOFER NÃO DETECTADO — rode CannonSpoofer\\spoof-apply.exe primeiro.");
+        ImGui::TextWrapped("SPOOFER NÃO DETECTADO — rode CannonSpoofer\\spoofer.exe → [1] apply primeiro.");
         ImGui::PopStyleColor();
     }
 

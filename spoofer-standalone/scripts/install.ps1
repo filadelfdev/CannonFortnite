@@ -22,11 +22,9 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -Wno-dev | Out-Null
 Say "building..."
 cmake --build build --config Release --parallel | Out-Null
 
-foreach($exe in @("spoof-apply","spoof-restore","spoof-burn","spoof-status")){
-    $p = Join-Path $root "build\bin\Release\$exe.exe"
-    if(Test-Path $p){ Say "  built: $exe.exe" "Green" }
-    else { Say "  MISSING: $exe.exe" "Red" }
-}
+$exe = Join-Path $root "build\bin\Release\spoofer.exe"
+if(Test-Path $exe){ Say "  built: spoofer.exe" "Green" }
+else { Say "  MISSING: spoofer.exe" "Red"; exit 1 }
 
 # ---- driver service (ShellHWAgent disguise name) ----
 $drv = Join-Path $root "driver\x64\Release\spoof.sys"
@@ -45,18 +43,14 @@ if(Test-Path $drv){
     Say "driver not built (skip — spoofer still runs user-mode only)" "Yellow"
 }
 
-# ---- desktop shortcut per verb ----
-foreach($verb in @("apply","restore","burn","status")){
-    $src = Join-Path $root "build\bin\Release\spoof-$verb.exe"
-    if(!(Test-Path $src)){ continue }
-    $lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "spoof-$verb.lnk"
-    $ws  = New-Object -ComObject WScript.Shell
-    $sh  = $ws.CreateShortcut($lnk)
-    $sh.TargetPath       = $src
-    $sh.WorkingDirectory = (Split-Path $src)
-    $sh.Save()
-}
+# ---- desktop shortcut (admin, for the interactive menu) ----
+$lnk = Join-Path ([Environment]::GetFolderPath("Desktop")) "CannonSpoofer.lnk"
+$ws  = New-Object -ComObject WScript.Shell
+$sh  = $ws.CreateShortcut($lnk)
+$sh.TargetPath       = $exe
+$sh.WorkingDirectory = (Split-Path $exe)
+$sh.Save()
 
 Pop-Location
 Say "installed. reboot if test-signing was just turned on." "Green"
-Say "then double-click 'spoof-apply' on the desktop (as admin)." "Green"
+Say "then double-click 'CannonSpoofer' on the desktop (as admin)." "Green"

@@ -11,14 +11,16 @@ else()
     add_compile_options(-Wall -Wextra -Wno-missing-field-initializers)
 endif()
 
-# Shared library — fingerprint + rotator + marker
-add_library(cfspoof_core STATIC
+# Single EXE — interactive menu when launched with no args, or
+# `spoofer apply|restore|burn|status` for scripts.
+add_executable(spoofer
+    src/main.cpp
     src/fingerprint.cpp
     src/rotator.cpp
     src/marker.cpp
 )
-target_include_directories(cfspoof_core PUBLIC include)
-target_link_libraries(cfspoof_core PUBLIC
+target_include_directories(spoofer PRIVATE include)
+target_link_libraries(spoofer PRIVATE
     advapi32
     setupapi
     cfgmgr32
@@ -26,13 +28,7 @@ target_link_libraries(cfspoof_core PUBLIC
     bcrypt
     shell32
 )
-
-# One EXE per verb — admin needed for registry writes + driver IOCTL.
-foreach(exe IN ITEMS apply restore burn status)
-    add_executable(spoof-${exe} src/main_${exe}.cpp)
-    target_link_libraries(spoof-${exe} PRIVATE cfspoof_core)
-    set_target_properties(spoof-${exe} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
-        OUTPUT_NAME "spoof-${exe}"
-    )
-endforeach()
+set_target_properties(spoofer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    OUTPUT_NAME "spoofer"
+)
