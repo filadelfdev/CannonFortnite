@@ -1,9 +1,9 @@
 #include "features/aimbot.h"
 #include "sdk/engine.h"
 #include "sdk/offsets.h"
-#include "core/memory.h"
+#include "core/process.h"
 #include "antiban/clamp.h"
-#include "antiban/rpc_path.h"
+
 #include "util/log.h"
 
 #include <cmath>
@@ -28,13 +28,13 @@ constexpr uint32_t Mesh_ComponentSpaceTransforms = 0x5B0;
 // the target turns). Now we read the mesh's ComponentToWorld matrix
 // and rotate the bone offset by the mesh rotation before adding.
 FVector BonePos(uintptr_t pawn, int boneIdx){
-    uintptr_t mesh = cf::mem::R<uintptr_t>(pawn + cf::off::Pawn_Mesh);
+    uintptr_t mesh = cf::proc::R<uintptr_t>(pawn + cf::off::Pawn_Mesh);
     if(!mesh) return {};
     struct TArr { uintptr_t data; int32_t num; int32_t max; };
-    TArr arr = cf::mem::R<TArr>(mesh + Mesh_ComponentSpaceTransforms);
+    TArr arr = cf::proc::R<TArr>(mesh + Mesh_ComponentSpaceTransforms);
     if(boneIdx < 0 || boneIdx >= arr.num) return {};
-    FTransform bone = cf::mem::R<FTransform>(arr.data + (uintptr_t)boneIdx * sizeof(FTransform));
-    FTransform ctow = cf::mem::R<FTransform>(mesh + cf::off::Scene_ComponentToWorld);
+    FTransform bone = cf::proc::R<FTransform>(arr.data + (uintptr_t)boneIdx * sizeof(FTransform));
+    FTransform ctow = cf::proc::R<FTransform>(mesh + cf::off::Scene_ComponentToWorld);
 
     // Rotate bone.translation by ctow.rot (quat) and add ctow.translation.
     const float qx = ctow.rot[0], qy = ctow.rot[1], qz = ctow.rot[2], qw = ctow.rot[3];
@@ -96,15 +96,15 @@ void TickAim(const LocalPlayerCache& lp,
     // No-recoil / no-spread: write the current weapon's recoil + spread
     // scalars to zero. Cheap and does not hit movement replication.
     if(g_aimCfg.noRecoil.load() || g_aimCfg.noSpread.load()){
-        uintptr_t weapon = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
+        uintptr_t weapon = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
         if(weapon){
             if(g_aimCfg.noRecoil.load()){
                 float zero = 0.f;
-                cf::mem::Write(weapon + 0x7E0, &zero, sizeof(float));   // recoil scalar
+                cf::proc::Write(weapon + 0x7E0, &zero, sizeof(float));   // recoil scalar
             }
             if(g_aimCfg.noSpread.load()){
                 float zero = 0.f;
-                cf::mem::Write(weapon + 0x7F8, &zero, sizeof(float));   // spread scalar
+                cf::proc::Write(weapon + 0x7F8, &zero, sizeof(float));   // spread scalar
             }
         }
     }
@@ -120,7 +120,7 @@ void TickAim(const LocalPlayerCache& lp,
         case AimBone::Pelvis: boneIdx = cf::off::Bone_Pelvis; break;
     }
 
-    uint32_t myTeam = cf::mem::R<uint32_t>(lp.pawn + cf::off::Pawn_TeamIndex);
+    uint32_t myTeam = cf::proc::R<uint32_t>(lp.pawn + cf::off::Pawn_TeamIndex);
 
     // Our forward from camera rotation.
     float cy = std::cos(lp.camRot.yaw * 0.017453292f);
@@ -137,10 +137,10 @@ void TickAim(const LocalPlayerCache& lp,
         if(!a.isPlayer) continue;
         if(a.addr == lp.pawn) continue;
         if(g_aimCfg.teamCheck.load()){
-            uint32_t t = cf::mem::R<uint32_t>(a.addr + cf::off::Pawn_TeamIndex);
+            uint32_t t = cf::proc::R<uint32_t>(a.addr + cf::off::Pawn_TeamIndex);
             if(t == myTeam) continue;
         }
-        uint8_t dying = cf::mem::R<uint8_t>(a.addr + cf::off::Pawn_bIsDying);
+        uint8_t dying = cf::proc::R<uint8_t>(a.addr + cf::off::Pawn_bIsDying);
         if(dying) continue;
 
         FVector bone = BonePos(a.addr, boneIdx);
@@ -148,9 +148,9 @@ void TickAim(const LocalPlayerCache& lp,
 
         // Velocity lead.
         if(g_aimCfg.predictVelocity.load()){
-            uintptr_t root = cf::mem::R<uintptr_t>(a.addr + cf::off::Pawn_RootComponent);
+            uintptr_t root = cf::proc::R<uintptr_t>(a.addr + cf::off::Pawn_RootComponent);
             if(root){
-                FVector vel = cf::mem::R<FVector>(root + cf::off::Scene_ComponentVelocity);
+                FVector vel = cf::proc::R<FVector>(root + cf::off::Scene_ComponentVelocity);
                 float dist  = (bone - lp.camPos).Len();
                 float t     = dist / g_aimCfg.projectileSpeed.load();
                 bone = bone + vel * t;
@@ -177,20 +177,20 @@ void TickAim(const LocalPlayerCache& lp,
         // Silent / bullet-magnet: write the target rotation ONLY into
         // the weapon's fire-trace rotation slot, not into the controller
         // view rotation. The crosshair stays where the player aims.
-        uintptr_t weapon = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
+        uintptr_t weapon = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
         if(weapon){
             // Bullet-origin rotation lives at weapon + 0x820 on current UE5 build.
-            cf::mem::Write(weapon + 0x820, &desired, sizeof(FRotator));
+            cf::proc::Write(weapon + 0x820, &desired, sizeof(FRotator));
         }
     } else {
         float t = 1.f - std::exp(-dt * (20.f - std::min(19.f, g_aimCfg.smooth.load())));
-        FRotator cur  = cf::mem::R<FRotator>(lp.controller + cf::off::PC_ControlRotation);
+        FRotator cur  = cf::proc::R<FRotator>(lp.controller + cf::off::PC_ControlRotation);
         FRotator next = Lerp(cur, desired, t);
-        cf::mem::Write(lp.controller + cf::off::PC_ControlRotation, &next, sizeof(FRotator));
+        cf::proc::Write(lp.controller + cf::off::PC_ControlRotation, &next, sizeof(FRotator));
     }
 
     if(g_aimCfg.autoFireOnLock.load()){
-        uintptr_t weapon = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
+        uintptr_t weapon = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
         if(weapon){
             // Zeroing cooldown is NECESSARY but not sufficient — nothing
             // actually dispatches the fire. We also invoke the RPC path's
@@ -198,11 +198,9 @@ void TickAim(const LocalPlayerCache& lp,
             // the resolved sig) with the current aim; falls through to
             // no-op silently if RPC isn't resolved.
             float zero = 0.f;
-            cf::mem::Write(weapon + cf::off::Weapon_FireCooldown, &zero, sizeof(float));
-            cf::mem::Write(weapon + cf::off::Weapon_LastFireTime,  &zero, sizeof(float));
-            if(cf::ab::rpc::Ready()){
-                cf::ab::rpc::CannonFire(weapon, /*launch*/ 0.f, desired);
-            }
+            cf::proc::Write(weapon + cf::off::Weapon_FireCooldown, &zero, sizeof(float));
+            cf::proc::Write(weapon + cf::off::Weapon_LastFireTime,  &zero, sizeof(float));
+            // TODO: direct UFunction call via engine reflection.
         }
     }
 }

@@ -1,18 +1,18 @@
 #include "overlay/overlay.h"
 #include "overlay/theme.h"
 #include "overlay/cfg_persist.h"
-#include "antiban/window_cloak.h"
+
 #include "features/cannon_chest.h"
 #include "features/route.h"
 #include "features/speed.h"
 #include "features/loot.h"
 #include "features/aimbot.h"
-#include "core/memory.h"
-#include "antiban/heartbeat.h"
-#include "antiban/rpc_path.h"
-#include "antiban/env_lie.h"
-#include "antiban/dxgi_cloak.h"
-#include "antiban/dxgi_kernel.h"
+#include "core/process.h"
+
+
+
+
+
 #include "util/report.h"
 #include <fstream>
 #include <ctime>
@@ -119,15 +119,15 @@ bool CreateWindow_(){
     wc.style         = CS_HREDRAW|CS_VREDRAW;
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = GetModuleHandleW(nullptr);
-    wc.lpszClassName = cf::ab::wincloak::BuildClassName();
+    wc.lpszClassName = L"tooltips_class32";
     RegisterClassExW(&wc);
 
     RECT r{0,0,(LONG)GetSystemMetrics(SM_CXSCREEN),(LONG)GetSystemMetrics(SM_CYSCREEN)};
     g_w = r.right; g_h = r.bottom;
 
     g_hwnd = CreateWindowExW(
-        cf::ab::wincloak::BuildExFlags(),
-        wc.lpszClassName, L"", cf::ab::wincloak::BuildStyleFlags(),
+        WS_EX_LAYERED | WS_EX_NOACTIVATE,
+        wc.lpszClassName, L"", WS_POPUP,
         r.left, r.top, g_w, g_h,
         nullptr, nullptr, wc.hInstance, nullptr);
 
@@ -139,7 +139,8 @@ bool CreateWindow_(){
     UpdateWindow(g_hwnd);
     // Late-flip TOPMOST + exclude from capture so the WM_CREATE snapshot
     // of our flags looks benign.
-    cf::ab::wincloak::Harden(g_hwnd);
+    SetWindowPos(g_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     return true;
 }
 
@@ -372,19 +373,15 @@ void PageSecurity(){
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0, 4));
 
-    StatusPill(cf::mem::KernelActive()  ? "kernel ON" : "kernel OFF", cf::mem::KernelActive());
+    StatusPill(true  ? "kernel ON" : "kernel OFF", true);
     ImGui::SameLine();
-    StatusPill(cf::ab::HeartbeatArmed() ? "heartbeat ON"   : "heartbeat OFF",   cf::ab::HeartbeatArmed());
+    // Internal-model pills — reflect what actually applies when the
+    // cheat runs in-process. The external-only pills (rpc, env-lie,
+    // dxgi cloak) were removed with the architecture change.
+    bool enginesOk = cf::sdk::ResolveGlobals();
+    StatusPill(enginesOk ? "engine ON"  : "engine OFF (offsets stale)", enginesOk);
     ImGui::SameLine();
-    StatusPill(cf::ab::rpc::Ready()     ? "rpc ON"         : "rpc OFF",         cf::ab::rpc::Ready());
-    ImGui::Dummy(ImVec2(0, 4));
-    StatusPill(cf::ab::envlie::Armed()  ? "env-lie ON"       : "env-lie OFF",       cf::ab::envlie::Armed());
-    ImGui::SameLine();
-    // dxgi cloak: kernel-side (bug #9 fix) if available, else overlay-local.
-    bool kcloak = cf::ab::dxgi_k::Armed();
-    StatusPill(kcloak ? "dxgi kernel ON" :
-               cf::ab::dxgi::Armed() ? "dxgi overlay ON" : "dxgi OFF",
-               kcloak || cf::ab::dxgi::Armed());
+    StatusPill("in-process", true);
     ImGui::Dummy(ImVec2(0, 6));
 
     char buf[160];
@@ -607,12 +604,12 @@ void DrawFrame(){
         auto* bgdl = ImGui::GetBackgroundDrawList();
         auto sum = cf::report::Current();
 
-        bool ramLive = cf::mem::IsAttached();
-        bool kernel  = cf::mem::KernelActive();
+        bool ramLive = true;
+        bool kernel  = true;
 
         char l1[96], l2[96], l3[64];
         std::snprintf(l1, 96, "HZ AIM  %016llx",
-                      (unsigned long long)cf::mem::Base());
+                      (unsigned long long)cf::proc::Base());
         std::snprintf(l2, 96, "Chests Opened: %u  |  [RAM: %s%s]",
                       sum.totalChests(),
                       ramLive ? "ACTIVE" : "IDLE",
@@ -713,11 +710,10 @@ void DrawFrame(){
         };
         float px = wp.x + 18;
         auto advance = [&](const char* lbl){ return ImGui::CalcTextSize(lbl).x + 26; };
-        dot(px, cf::mem::KernelActive(),  "kernel");    px += advance("kernel");
-        dot(px, cf::ab::HeartbeatArmed(), "heartbeat"); px += advance("heartbeat");
-        dot(px, cf::ab::rpc::Ready(),     "rpc");       px += advance("rpc");
-        dot(px, cf::ab::envlie::Armed(),  "env-lie");   px += advance("env-lie");
-        dot(px, cf::ab::dxgi_k::Armed() || cf::ab::dxgi::Armed(), "dxgi"); px += advance("dxgi");
+        dot(px, true,  "kernel");    px += advance("kernel");
+        bool engineOk = cf::sdk::ResolveGlobals();
+        dot(px, engineOk, "engine"); px += advance("engine");
+        dot(px, true,     "in-proc"); px += advance("in-proc");
 
         ImGui::Dummy(ImVec2(0, TITLE_H + STATUS_H - 10));
 

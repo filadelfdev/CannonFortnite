@@ -1,6 +1,6 @@
 #include "sdk/engine.h"
 #include "sdk/offsets.h"
-#include "core/memory.h"
+#include "core/process.h"
 #include "antiban/hash.h"
 
 #include <unordered_map>
@@ -39,15 +39,15 @@ std::string ReadFNameChunked(uint32_t index){
     const uint32_t chunk    = index >> 16;
     const uint32_t offset   = (index & 0xFFFF) << 1;
     uintptr_t chunkPtrAddr  = g.gNames + 0x10 + (uintptr_t)chunk * 8;
-    uintptr_t chunkBase     = cf::mem::R<uintptr_t>(chunkPtrAddr);
+    uintptr_t chunkBase     = cf::proc::R<uintptr_t>(chunkPtrAddr);
     std::string out;
     if(chunkBase){
         uintptr_t entryAddr = chunkBase + offset;
-        uint16_t header = cf::mem::R<uint16_t>(entryAddr);
+        uint16_t header = cf::proc::R<uint16_t>(entryAddr);
         uint16_t len    = header >> 6;
         if(len > 0 && len <= 256){
             char buf[257]{};
-            cf::mem::Read(entryAddr + 2, buf, len);
+            cf::proc::Read(entryAddr + 2, buf, len);
             buf[len] = 0;
             out.assign(buf, len);
         }
@@ -64,7 +64,7 @@ std::string ReadFNameChunked(uint32_t index){
 bool ResolveGlobals(){
     std::scoped_lock _(g.lock);
     if(g.resolved) return true;
-    uintptr_t base = cf::mem::Base();
+    uintptr_t base = cf::proc::Base();
     if(!base) return false;
     g.gWorld   = base + cf::off::G_WORLD;
     g.gNames   = base + cf::off::G_NAMES;
@@ -87,9 +87,9 @@ std::string ActorClassName(uintptr_t actor){
         auto it = g_classCache.find(actor);
         if(it!=g_classCache.end()) return it->second;
     }
-    uintptr_t uclass = cf::mem::R<uintptr_t>(actor + cf::off::UObject_ClassPrivate);
+    uintptr_t uclass = cf::proc::R<uintptr_t>(actor + cf::off::UObject_ClassPrivate);
     if(!uclass) return {};
-    uint32_t nameIdx = cf::mem::R<uint32_t>(uclass + cf::off::UObject_NamePrivate);
+    uint32_t nameIdx = cf::proc::R<uint32_t>(uclass + cf::off::UObject_NamePrivate);
     std::string n = FNameToString(nameIdx);
     std::scoped_lock _(g_cacheLock);
     g_classCache[actor] = n;
@@ -105,25 +105,25 @@ bool EnumerateActors(std::vector<uintptr_t>& out){
     out.clear();
     if(!g.resolved && !ResolveGlobals()) return false;
 
-    uintptr_t world = cf::mem::R<uintptr_t>(g.gWorld);
+    uintptr_t world = cf::proc::R<uintptr_t>(g.gWorld);
     if(!world) return false;
 
     // Persistent + streaming levels.
     struct TArr { uintptr_t data; int32_t num; int32_t max; };
-    TArr levels = cf::mem::R<TArr>(world + cf::off::UWorld_Levels);
+    TArr levels = cf::proc::R<TArr>(world + cf::off::UWorld_Levels);
     if(levels.num<=0 || levels.num>256) return false;
 
     out.reserve(4096);
     for(int i=0;i<levels.num;++i){
-        uintptr_t level = cf::mem::R<uintptr_t>(levels.data + i*8);
+        uintptr_t level = cf::proc::R<uintptr_t>(levels.data + i*8);
         if(!level) continue;
 
         uintptr_t actorsArr = level + cf::off::ULevel_Actors;
-        TArr arr = cf::mem::R<TArr>(actorsArr);
+        TArr arr = cf::proc::R<TArr>(actorsArr);
         if(arr.num<=0 || arr.num>65536) continue;
 
         std::vector<uintptr_t> page(arr.num);
-        if(!cf::mem::Read(arr.data, page.data(), arr.num*sizeof(uintptr_t))) continue;
+        if(!cf::proc::Read(arr.data, page.data(), arr.num*sizeof(uintptr_t))) continue;
         for(auto a : page) if(a) out.push_back(a);
     }
     return true;
@@ -171,38 +171,38 @@ void ClassifyActor(Actor& a){
 bool ReadLocalPlayer(LocalPlayerCache& lp){
     if(!g.resolved && !ResolveGlobals()) return false;
 
-    uintptr_t world = cf::mem::R<uintptr_t>(g.gWorld);
+    uintptr_t world = cf::proc::R<uintptr_t>(g.gWorld);
     if(!world) return false;
 
-    uintptr_t gi = cf::mem::R<uintptr_t>(world + cf::off::UWorld_OwningGameInstance);
+    uintptr_t gi = cf::proc::R<uintptr_t>(world + cf::off::UWorld_OwningGameInstance);
     if(!gi) return false;
 
     struct TArr { uintptr_t data; int32_t num; int32_t max; };
-    TArr players = cf::mem::R<TArr>(gi + cf::off::GameInstance_LocalPlayers);
+    TArr players = cf::proc::R<TArr>(gi + cf::off::GameInstance_LocalPlayers);
     if(players.num<=0) return false;
 
-    uintptr_t localPlayer = cf::mem::R<uintptr_t>(players.data);
+    uintptr_t localPlayer = cf::proc::R<uintptr_t>(players.data);
     if(!localPlayer) return false;
 
-    lp.controller  = cf::mem::R<uintptr_t>(localPlayer + cf::off::LocalPlayer_PlayerController);
+    lp.controller  = cf::proc::R<uintptr_t>(localPlayer + cf::off::LocalPlayer_PlayerController);
     if(!lp.controller) return false;
 
-    lp.pawn       = cf::mem::R<uintptr_t>(lp.controller + cf::off::PC_AcknowledgedPawn);
-    uintptr_t cam = cf::mem::R<uintptr_t>(lp.controller + cf::off::PC_PlayerCameraMgr);
+    lp.pawn       = cf::proc::R<uintptr_t>(lp.controller + cf::off::PC_AcknowledgedPawn);
+    uintptr_t cam = cf::proc::R<uintptr_t>(lp.controller + cf::off::PC_PlayerCameraMgr);
 
     if(lp.pawn){
-        lp.rootComp     = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_RootComponent);
-        lp.movementComp = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Character_CharacterMovement);
+        lp.rootComp     = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Pawn_RootComponent);
+        lp.movementComp = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Character_CharacterMovement);
         if(lp.rootComp){
-            lp.pos      = cf::mem::R<FVector>(lp.rootComp + cf::off::Scene_RelativeLocation);
-            lp.velocity = cf::mem::R<FVector>(lp.rootComp + cf::off::Scene_ComponentVelocity);
+            lp.pos      = cf::proc::R<FVector>(lp.rootComp + cf::off::Scene_RelativeLocation);
+            lp.velocity = cf::proc::R<FVector>(lp.rootComp + cf::off::Scene_ComponentVelocity);
         }
     }
 
     if(cam){
-        FVector  camPos  = cf::mem::R<FVector> (cam + cf::off::Cam_CameraCachePrivate + 0x10);
-        FRotator camRot  = cf::mem::R<FRotator>(cam + cf::off::Cam_CameraCachePrivate + 0x10 + 0x0C);
-        float    fov     = cf::mem::R<float>   (cam + cf::off::Cam_CameraCachePrivate + 0x10 + 0x30);
+        FVector  camPos  = cf::proc::R<FVector> (cam + cf::off::Cam_CameraCachePrivate + 0x10);
+        FRotator camRot  = cf::proc::R<FRotator>(cam + cf::off::Cam_CameraCachePrivate + 0x10 + 0x0C);
+        float    fov     = cf::proc::R<float>   (cam + cf::off::Cam_CameraCachePrivate + 0x10 + 0x30);
         lp.camPos = camPos; lp.camRot = camRot; lp.fov = fov;
 
         // Build view matrix from rotation (yaw, pitch, roll in degrees).

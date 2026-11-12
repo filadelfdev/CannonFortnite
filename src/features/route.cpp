@@ -1,7 +1,7 @@
 #include "features/route.h"
 #include "features/cannon_chest.h"
 #include "sdk/offsets.h"
-#include "core/memory.h"
+#include "core/process.h"
 #include "antiban/clamp.h"
 #include "util/log.h"
 #include "util/report.h"
@@ -29,13 +29,13 @@ double NowSec(){
 }
 
 bool IsLooted(uintptr_t chest){
-    return (cf::mem::R<uint8_t>(chest + cf::off::Chest_bAlreadySearched) & 1) != 0;
+    return (cf::proc::R<uint8_t>(chest + cf::off::Chest_bAlreadySearched) & 1) != 0;
 }
 
 uint32_t ChestWeight(const Actor& a){
     // Weight the plan: closer first, with a rare-chest bonus so the
     // route prioritises tier > proximity when tier is high.
-    uint32_t tier = cf::mem::R<uint32_t>(a.addr + cf::off::Chest_LootTier);
+    uint32_t tier = cf::proc::R<uint32_t>(a.addr + cf::off::Chest_LootTier);
     uint32_t w = (uint32_t)a.distance;
     if(g_routeCfg.preferUnopenedTier.load() && tier >= 2) w = w / 2;
     return w;
@@ -45,9 +45,9 @@ void OpenChestRaw(uintptr_t chest){
     uint8_t flag = 1;
     // Guard: only count the open if the write actually landed. A failed
     // write (unmapped page, process exit) must not credit the counter.
-    if(!cf::mem::Write(chest + cf::off::Chest_bAlreadySearched, &flag, 1)) return;
+    if(!cf::proc::Write(chest + cf::off::Chest_bAlreadySearched, &flag, 1)) return;
     float bounce[4] = { 1.f, 0.f, 0.f, 0.f };
-    cf::mem::Write(chest + cf::off::Chest_SearchBounceData, bounce, sizeof(bounce));
+    cf::proc::Write(chest + cf::off::Chest_SearchBounceData, bounce, sizeof(bounce));
     g_looted.fetch_add(1);
     cf::report::RecordEvent(cf::report::EventKind::RouteOpen);
 }
@@ -137,24 +137,24 @@ void TickRoute(const LocalPlayerCache& lp,
     uintptr_t target;
     { std::scoped_lock _(g_lock); target = g_order[g_cursor]; }
 
-    uintptr_t root = cf::mem::R<uintptr_t>(target + cf::off::Pawn_RootComponent);
+    uintptr_t root = cf::proc::R<uintptr_t>(target + cf::off::Pawn_RootComponent);
     if(!root){ std::scoped_lock _(g_lock); ++g_cursor; return; }
 
-    FVector targetPos = cf::mem::R<FVector>(root + cf::off::Scene_RelativeLocation);
+    FVector targetPos = cf::proc::R<FVector>(root + cf::off::Scene_RelativeLocation);
 
     // Hop: clamp the delta so a single warp never trips the anti-teleport
     // heuristic. If the distance is greater than the hop cap, we close
     // the gap over several ticks.
     FVector clamped = cf::ab::clamp::teleport(lp.pos, targetPos,
                                               g_routeCfg.hopDelta_cm.load());
-    cf::mem::Write(lp.rootComp + cf::off::Scene_RelativeLocation, &clamped, sizeof(FVector));
+    cf::proc::Write(lp.rootComp + cf::off::Scene_RelativeLocation, &clamped, sizeof(FVector));
     g_lastHop = now;
 
     // Face the target so the client's own anim doesn't desync the move.
     if(g_routeCfg.rotateToTarget.load()){
         FVector d = targetPos - lp.pos;
         FRotator rot{0.f, std::atan2(d.y, d.x) * 57.29578f, 0.f};
-        cf::mem::Write(lp.rootComp + cf::off::Scene_RelativeRotation, &rot, sizeof(rot));
+        cf::proc::Write(lp.rootComp + cf::off::Scene_RelativeRotation, &rot, sizeof(rot));
     }
 
     // Arrived? Bulk-open every chest in the sphere around our new pos.

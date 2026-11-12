@@ -1,10 +1,10 @@
 #include "features/cannon_chest.h"
 #include "sdk/engine.h"
 #include "sdk/offsets.h"
-#include "core/memory.h"
+#include "core/process.h"
 #include "antiban/clamp.h"
 #include "antiban/jitter.h"
-#include "antiban/rpc_path.h"
+
 #include "util/log.h"
 #include "util/report.h"
 
@@ -41,7 +41,7 @@ double NowSec(){
 
 bool IsChestLooted(uintptr_t chest){
     if(!chest) return true;
-    uint8_t v = cf::mem::R<uint8_t>(chest + cf::off::Chest_bAlreadySearched);
+    uint8_t v = cf::proc::R<uint8_t>(chest + cf::off::Chest_bAlreadySearched);
     return (v & 1) != 0;
 }
 
@@ -75,26 +75,28 @@ void FireCannonWeaponAt(const LocalPlayerCache& lp,
     FRotator aim = LookAt(shootOrigin, chestPos);
     aim.pitch += cf::ab::jitter::wobble(0.f, g_cfg.aimJitterDeg.load());
     aim.yaw   += cf::ab::jitter::wobble(0.f, g_cfg.aimJitterDeg.load());
-    cf::mem::Write(lp.controller + cf::off::PC_ControlRotation, &aim, sizeof(aim));
+    cf::proc::Write(lp.controller + cf::off::PC_ControlRotation, &aim, sizeof(aim));
     // Also stash into weapon's own fire-trace rotation (bullet magnet).
-    cf::mem::Write(weapon + 0x820, &aim, sizeof(FRotator));
+    cf::proc::Write(weapon + 0x820, &aim, sizeof(FRotator));
 
     // 2. Zero the client-side cooldown — the "no cooldown" trick.
     float zero = 0.f;
-    cf::mem::Write(weapon + cf::off::Weapon_LastFireTime, &zero, sizeof(float));
-    cf::mem::Write(weapon + cf::off::Weapon_FireCooldown, &zero, sizeof(float));
+    cf::proc::Write(weapon + cf::off::Weapon_LastFireTime, &zero, sizeof(float));
+    cf::proc::Write(weapon + cf::off::Weapon_FireCooldown, &zero, sizeof(float));
 
     // 3. Keep ammo topped up so shots never run dry mid-burst.
     uint8_t infAmmo = 1;
-    cf::mem::Write(weapon + cf::off::Weapon_bHasInfiniteAmmo, &infAmmo, 1);
+    cf::proc::Write(weapon + cf::off::Weapon_bHasInfiniteAmmo, &infAmmo, 1);
     int ammo = 9999;
-    cf::mem::Write(weapon + cf::off::Weapon_AmmoCount, &ammo, sizeof(int));
+    cf::proc::Write(weapon + cf::off::Weapon_AmmoCount, &ammo, sizeof(int));
 
     // 4. RPC path (if resolved) sends the real ServerFire; otherwise
     //    the direct writes above are the "fire" signal.
-    if(g_cfg.preferRpc.load() && cf::ab::rpc::Ready()){
-        cf::ab::rpc::CannonFire(weapon, /*launch*/ 4800.f, aim);
-    }
+    // TODO: direct UFunction call via engine reflection once sigs are
+    // resolved (Phase 2 RE). The writes above (cooldown zero + ammo
+    // top-up + aim write) are the cheat-side signal; a real ServerFire
+    // RPC invocation on the current weapon's UFunction table lives in
+    // this slot and will land here once resolved.
 }
 
 // Find the densest chest cluster in range AROUND THE PLAYER. The
@@ -185,7 +187,7 @@ void Tick(const LocalPlayerCache& lp,
     // Grab the currently equipped weapon — this is the Pirate Cannon
     // (or whatever the player has in hand). The cheat never swaps
     // weapon on its own; expects the user to have the right item.
-    uintptr_t weapon = cf::mem::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
+    uintptr_t weapon = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
     if(!weapon) return;
 
     // Build the near-cluster queue around the player.
@@ -226,9 +228,9 @@ void Tick(const LocalPlayerCache& lp,
             break;
         }
 
-        uintptr_t chestRoot = cf::mem::R<uintptr_t>(chest + cf::off::Pawn_RootComponent);
+        uintptr_t chestRoot = cf::proc::R<uintptr_t>(chest + cf::off::Pawn_RootComponent);
         if(!chestRoot) continue;
-        FVector chestPos = cf::mem::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
+        FVector chestPos = cf::proc::R<FVector>(chestRoot + cf::off::Scene_RelativeLocation);
 
         FireCannonWeaponAt(lp, weapon, chestPos);
         p.pending.push_back({chest, now});
