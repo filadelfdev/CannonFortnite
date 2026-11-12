@@ -531,11 +531,11 @@ void PageReport(){
 
 void PageAbout(){
     using namespace cf::ov::theme::col;
-    ImGui::PushStyleColor(ImGuiCol_Text, X(text));
-    ImGui::TextUnformatted("cannon chest ripper");
+    ImGui::PushStyleColor(ImGuiCol_Text, X(gold));
+    ImGui::TextUnformatted("HZ AIM");
     ImGui::PopStyleColor();
     ImGui::PushStyleColor(ImGuiCol_Text, X(textDim));
-    ImGui::TextUnformatted("v2 — kernel path · teleport chain · ac heartbeat");
+    ImGui::TextUnformatted("pirate token farm · v6");
     ImGui::Dummy(ImVec2(0, 10));
     ImGui::TextUnformatted("hotkeys");
     ImGui::PopStyleColor();
@@ -598,10 +598,10 @@ void DrawFrame(){
         for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
-    // ---- Top-left HUD — mimics RZAIM-style compact readout ----
-    //   line 1: brand + session hash (first 16 hex of process base)
-    //   line 2: Chests Opened: N  |  [RAM: ACTIVE/IDLE]
-    //   line 3: +XP earned (yellow accent)
+    // ---- Top-left HUD — HZ AIM branded, three-line compact readout ----
+    //   line 1: HZ AIM  <base hex>            (brand, gold)
+    //   line 2: Chests Opened: N | [RAM: ...]  (status, green/red)
+    //   line 3: +XP earned                     (accent gold)
     if(g_showHud.load()){
         auto* bgdl = ImGui::GetBackgroundDrawList();
         auto sum = cf::report::Current();
@@ -610,7 +610,7 @@ void DrawFrame(){
         bool kernel  = cf::mem::KernelActive();
 
         char l1[96], l2[96], l3[64];
-        std::snprintf(l1, 96, "CF PIRATE RIPPER  %016llx",
+        std::snprintf(l1, 96, "HZ AIM  %016llx",
                       (unsigned long long)cf::mem::Base());
         std::snprintf(l2, 96, "Chests Opened: %u  |  [RAM: %s%s]",
                       sum.totalChests(),
@@ -621,40 +621,67 @@ void DrawFrame(){
         ImVec2 s1 = ImGui::CalcTextSize(l1);
         ImVec2 s2 = ImGui::CalcTextSize(l2);
         ImVec2 s3 = ImGui::CalcTextSize(l3);
-        float w = std::max(std::max(s1.x, s2.x), s3.x) + 18;
-        float h = s1.y + s2.y + s3.y + 18;
+        float w = std::max(std::max(s1.x, s2.x), s3.x) + 22;
+        float h = s1.y + s2.y + s3.y + 20;
 
+        // Deep red backdrop with a faint gold top-edge line.
         bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h),
-                            IM_COL32(190, 30, 30, 220), 0);
-        bgdl->AddText(ImVec2(8, 4),                       IM_COL32_WHITE, l1);
+                            IM_COL32(170, 25, 25, 230), 0);
+        bgdl->AddRectFilled(ImVec2(0, h-2), ImVec2(w, h),
+                            IM_COL32(232, 185, 56, 255), 0);
+
+        bgdl->AddText(ImVec2(10, 4),                       IM_COL32(255, 255, 255, 255), l1);
         ImU32 ramCol = ramLive ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 80, 80, 255);
-        bgdl->AddText(ImVec2(8, 4 + s1.y + 2),            ramCol,         l2);
-        bgdl->AddText(ImVec2(8, 4 + s1.y + s2.y + 4),     IM_COL32(255, 220, 90, 255), l3);
+        bgdl->AddText(ImVec2(10, 4 + s1.y + 2),            ramCol,         l2);
+        bgdl->AddText(ImVec2(10, 4 + s1.y + s2.y + 4),     IM_COL32(232, 185, 56, 255), l3);
     }
 
     // ---- menu ----
     if(g_ovCfg.showMenu.load()){
         using namespace cf::ov::theme::col;
-        ImGui::SetNextWindowSize(ImVec2(560, 480), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowBgAlpha(0.96f);
+        ImGui::SetNextWindowSize(ImVec2(620, 520), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowBgAlpha(0.97f);
         ImGui::Begin("##cf-root", nullptr,
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_NoCollapse);
 
-        // Title strip
+        // ---- Title strip (72px) — HZ AIM logo + live counters ----
         ImVec2 wp = ImGui::GetWindowPos();
         ImVec2 ws = ImGui::GetWindowSize();
         auto* wdl = ImGui::GetWindowDrawList();
-        wdl->AddRectFilled(ImVec2(wp.x, wp.y),
-                           ImVec2(wp.x + ws.x, wp.y + 42),
-                           X(bg2), 10.f, ImDrawFlags_RoundCornersTop);
-        wdl->AddRectFilled(ImVec2(wp.x + 16, wp.y + 20),
-                           ImVec2(wp.x + 22, wp.y + 32),
-                           X(accent), 2.f);
-        wdl->AddText(ImVec2(wp.x + 32, wp.y + 14), X(text), "cannon ripper");
-        wdl->AddText(ImVec2(wp.x + 130, wp.y + 16), X(textDim), "v2");
 
-        // Right-side status mini: smashed count + rate + tokens
+        constexpr float TITLE_H = 72.f;
+        constexpr float STATUS_H = 30.f;
+
+        // Dark header background with subtle gold bottom border.
+        wdl->AddRectFilled(ImVec2(wp.x, wp.y),
+                           ImVec2(wp.x + ws.x, wp.y + TITLE_H),
+                           X(bg2), 10.f, ImDrawFlags_RoundCornersTop);
+        wdl->AddRectFilled(ImVec2(wp.x, wp.y + TITLE_H - 2),
+                           ImVec2(wp.x + ws.x, wp.y + TITLE_H),
+                           X(gold), 0);
+
+        // Logo badge — crossed-pistols-ish mark drawn with vector lines.
+        float cx = wp.x + 30;
+        float cy = wp.y + TITLE_H*0.5f;
+        // Hexagon outline
+        ImVec2 hex[6]; float rad = 18.f;
+        for(int i=0;i<6;++i){
+            float a = (i/6.f) * 6.2831853f - 1.5707963f;
+            hex[i] = ImVec2(cx + std::cos(a)*rad, cy + std::sin(a)*rad);
+        }
+        wdl->AddConvexPolyFilled(hex, 6, X(surf));
+        wdl->AddPolyline(hex, 6, X(gold), ImDrawFlags_Closed, 2.f);
+        // Inside: HZ monogram (two angled strokes forming an H + Z feel)
+        wdl->AddLine(ImVec2(cx-7, cy-7), ImVec2(cx-7, cy+7), X(gold), 2.f);
+        wdl->AddLine(ImVec2(cx+7, cy-7), ImVec2(cx+7, cy+7), X(gold), 2.f);
+        wdl->AddLine(ImVec2(cx-7, cy),   ImVec2(cx+7, cy),   X(gold), 2.f);
+
+        // Wordmark
+        wdl->AddText(ImVec2(wp.x + 62, wp.y + 14), X(text),    "HZ AIM");
+        wdl->AddText(ImVec2(wp.x + 62, wp.y + 36), X(textDim), "pirate token farm");
+
+        // Right-side: live counter + rate + XP (gold accent on numbers)
         static double   t0 = 0.0;
         static uint32_t last = 0;
         static float    rate = 0.f;
@@ -665,12 +692,33 @@ void DrawFrame(){
             rate = (float)(s - last) / (float)(now - t0);
             t0 = now; last = s;
         }
-        char cnt[96];
-        std::snprintf(cnt, 96, "%u smashed · %.1f/s · %.1fM xp", s, rate, s * 0.137f);
-        ImVec2 sz = ImGui::CalcTextSize(cnt);
-        wdl->AddText(ImVec2(wp.x + ws.x - sz.x - 20, wp.y + 16), X(accent), cnt);
+        char cntLine1[64], cntLine2[64];
+        std::snprintf(cntLine1, 64, "%u chests", s);
+        std::snprintf(cntLine2, 64, "%.1f/s · +%u XP", rate, s*600u);
+        ImVec2 c1 = ImGui::CalcTextSize(cntLine1);
+        ImVec2 c2 = ImGui::CalcTextSize(cntLine2);
+        wdl->AddText(ImVec2(wp.x + ws.x - c1.x - 16, wp.y + 14), X(gold),    cntLine1);
+        wdl->AddText(ImVec2(wp.x + ws.x - c2.x - 16, wp.y + 36), X(textDim), cntLine2);
 
-        ImGui::Dummy(ImVec2(0, 32));
+        // ---- Status strip (30px) — compact pill row ----
+        float sy = wp.y + TITLE_H + 2;
+        wdl->AddRectFilled(ImVec2(wp.x, sy), ImVec2(wp.x + ws.x, sy + STATUS_H),
+                           X(bg), 0);
+        auto dot = [&](float x, bool ok, const char* lbl){
+            wdl->AddCircleFilled(ImVec2(x, sy + STATUS_H*0.5f), 3.2f,
+                                 ok ? X(::cf::ov::theme::col::ok) : X(textDim), 12);
+            wdl->AddText(ImVec2(x + 8, sy + (STATUS_H - ImGui::GetTextLineHeight())*0.5f),
+                         ok ? X(text) : X(textDim), lbl);
+        };
+        float px = wp.x + 18;
+        auto advance = [&](const char* lbl){ return ImGui::CalcTextSize(lbl).x + 26; };
+        dot(px, cf::mem::KernelActive(),  "kernel");    px += advance("kernel");
+        dot(px, cf::ab::HeartbeatArmed(), "heartbeat"); px += advance("heartbeat");
+        dot(px, cf::ab::rpc::Ready(),     "rpc");       px += advance("rpc");
+        dot(px, cf::ab::envlie::Armed(),  "env-lie");   px += advance("env-lie");
+        dot(px, cf::ab::dxgi_k::Armed() || cf::ab::dxgi::Armed(), "dxgi"); px += advance("dxgi");
+
+        ImGui::Dummy(ImVec2(0, TITLE_H + STATUS_H - 10));
 
         // Sidebar + content split
         ImGui::BeginChild("##sidebar", ImVec2(140, 0), false);
