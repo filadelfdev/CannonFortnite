@@ -192,15 +192,22 @@ void TickAim(const LocalPlayerCache& lp,
     if(g_aimCfg.autoFireOnLock.load()){
         uintptr_t weapon = cf::proc::R<uintptr_t>(lp.pawn + cf::off::Pawn_CurrentWeapon);
         if(weapon){
-            // Zeroing cooldown is NECESSARY but not sufficient — nothing
-            // actually dispatches the fire. We also invoke the RPC path's
-            // CannonFire (which maps to the weapon's ServerFire RPC on
-            // the resolved sig) with the current aim; falls through to
-            // no-op silently if RPC isn't resolved.
+            // Zeroing cooldown is necessary but not sufficient — the
+            // engine still needs the fire RPC to kick a bullet out.
+            // Invoke AFortWeapon::ServerFire with the aim rotation we
+            // just computed; ProcessEvent takes care of the FName →
+            // UFunction dispatch. Returns silently on a UFunction miss.
             float zero = 0.f;
             cf::proc::Write(weapon + cf::off::Weapon_FireCooldown, &zero, sizeof(float));
             cf::proc::Write(weapon + cf::off::Weapon_LastFireTime,  &zero, sizeof(float));
-            // TODO: direct UFunction call via engine reflection.
+
+            struct FireParams {
+                FRotator fireRotation;
+                FVector  fireStart;
+            } params;
+            params.fireRotation = desired;
+            params.fireStart    = lp.camPos;
+            cf::sdk::CallUFunction(weapon, "ServerFire", &params);
         }
     }
 }

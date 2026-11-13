@@ -119,6 +119,20 @@ namespace cf::off {
     constexpr uint32_t UObject_ClassPrivate = 0x10;
     constexpr uint32_t UObject_NamePrivate  = 0x18;
     constexpr uint32_t UObject_OuterPrivate = 0x20;
+    // UObject's vtable[ProcessEvent] — the virtual dispatch slot for
+    // the universal RPC entry. Index varies per UE build; dumped by
+    // scripts/dump_offsets.py pattern-sig "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24".
+    constexpr uint32_t UObject_VTable_ProcessEvent = 0x44 * 8;    // slot 0x44 → offset in bytes
+
+    // --- UStruct / UClass (reflection walk) ---
+    // UStruct is the base of UClass and UFunction; it holds a linked
+    // list of its child UFields (functions, properties) via Children.
+    // UClass additionally owns a FuncMap (TMap<FName, UFunction*>) for
+    // O(1) UFunction lookup by name — much faster than walking Children.
+    constexpr uint32_t UStruct_SuperStruct   = 0x40;
+    constexpr uint32_t UStruct_Children      = 0x48;   // UField* linked list head
+    constexpr uint32_t UField_Next           = 0x28;   // UField's next sibling
+    constexpr uint32_t UClass_FuncMap        = 0x98;   // TMap<FName, UFunction*>
 
     // --- FName ---
     constexpr uint32_t FName_Index = 0x0;

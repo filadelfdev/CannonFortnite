@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 #include "features/esp.h"
 #include <functional>
@@ -21,17 +22,19 @@ struct OverlayCfg {
     // rebound, the input loop watches for the next keydown and stores it.
     std::atomic<int>  rebindTarget{0};       // 0=none, 1..5 = one of the five
 };
-extern OverlayCfg g_ovCfg;
+CF_UI_API extern OverlayCfg g_ovCfg;
 
 using TickFn = std::function<void(float dt, float screenW, float screenH)>;
 
-// Create transparent, click-through overlay window, attach a D3D11 swap
-// chain to it, run ImGui. Blocks on its own message loop; caller owns the
-// thread. Returns on panic or WM_QUIT.
-int Run(TickFn perFrame);
+// Installs a D3D11 Present/ResizeBuffers hook on the game's own
+// swapchain, runs an ImGui frame per Present, then calls perFrame
+// with the real screen size. Blocks on a small wait thread; returns
+// when panic key fires or the main module unloads.
+CF_UI_API int Run(TickFn perFrame);
 
 // Called from the main thread's actor pipeline to publish the latest
-// draw list to the overlay renderer.
-void PublishDrawList(std::vector<cf::feat::DrawItem> items);
+// draw list to the overlay renderer. Takes the vector by value; ownership
+// transfers into cheat_ui's double-buffer.
+CF_UI_API void PublishDrawList(std::vector<cf::feat::DrawItem> items);
 
 } // namespace cf::ov

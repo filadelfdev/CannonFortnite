@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include <cstdio>
 #include <cstdarg>
 #include <mutex>
@@ -8,8 +9,8 @@ namespace cf::log {
 
 enum class Level { Trace, Info, Warn, Error };
 
-void SetLevel(Level);
-void Line(Level, const char* fmt, ...);
+CF_CORE_API void SetLevel(Level);
+CF_CORE_API void Line(Level, const char* fmt, ...);
 
 #define CF_INFO(...)  cf::log::Line(cf::log::Level::Info,  __VA_ARGS__)
 #define CF_WARN(...)  cf::log::Line(cf::log::Level::Warn,  __VA_ARGS__)

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 #include <atomic>
 
@@ -17,8 +18,8 @@ struct SpeedCfg {
     std::atomic<int>   pulseEveryTicks{1};        // write every tick now the kernel path is cheap
 };
 
-extern SpeedCfg g_speedCfg;
+CF_FEAT_API extern SpeedCfg g_speedCfg;
 
-void TickSpeed(const LocalPlayerCache& lp, int tickIndex);
+CF_FEAT_API void TickSpeed(const LocalPlayerCache& lp, int tickIndex);
 
 } // namespace cf::feat

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 #include <vector>
 #include <atomic>
@@ -56,17 +57,17 @@ struct CannonChestCfg {
 
 // Rewrites cooldownMeanMs / maxFiresPerTick / fireRange / warp cap
 // to the preset curve. Called when the user moves the Speed slider.
-void ApplySpeedPreset(int level_1_to_10);
+CF_FEAT_API void ApplySpeedPreset(int level_1_to_10);
 
-extern CannonChestCfg g_cfg;
+CF_FEAT_API extern CannonChestCfg g_cfg;
 
 // Called every overlay tick. Pulls the local player + actor list, picks the
 // nearest live chest, snaps the nearest cannon's pitch/yaw at it, writes
 // launch power, trips the fire RPC-equivalent proxy, and on landing
 // writes the chest's SearchBounceData to simulate a search.
-void Tick(const LocalPlayerCache& lp,
-          const std::vector<Actor>& actors,
-          float dt);
+CF_FEAT_API void Tick(const LocalPlayerCache& lp,
+                      const std::vector<Actor>& actors,
+                      float dt);
 
 struct ChestVisual {
     Actor actor;
@@ -74,10 +75,10 @@ struct ChestVisual {
     bool  reachable{};
     bool  queuedAsTarget{};
 };
-std::vector<ChestVisual> GetVisualState();
+CF_FEAT_API std::vector<ChestVisual> GetVisualState();
 
 // Pirate Token smash counter — one smash = one token = 137k xp.
-uint32_t SmashedThisSession();
-void     ResetSmashCounter();
+CF_FEAT_API uint32_t SmashedThisSession();
+CF_FEAT_API void     ResetSmashCounter();
 
 } // namespace cf::feat

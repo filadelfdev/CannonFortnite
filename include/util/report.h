@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include <cstdint>
 #include <string>
 
@@ -18,8 +19,8 @@ enum class EventKind {
     TokenDrop,       // only known if we see the on-screen notification
 };
 
-void RecordEvent(EventKind k);
-void MarkTokenDrop();    // called when the client-side token notification fires
+CF_CORE_API void RecordEvent(EventKind k);
+CF_CORE_API void MarkTokenDrop();    // called when the client-side token notification fires
 
 struct Summary {
     double   sessionSeconds;
@@ -44,9 +45,9 @@ struct Summary {
     double   approxBpLevels() const { return totalXp() / 80000.0; }
 };
 
-Summary Current();
-void    Reset();
-bool    SaveToFile();            // writes to %LOCALAPPDATA%\INetCache
-std::string SavePath();          // human-readable path
+CF_CORE_API Summary     Current();
+CF_CORE_API void        Reset();
+CF_CORE_API bool        SaveToFile();            // writes to %LOCALAPPDATA%\INetCache
+CF_CORE_API std::string SavePath();              // human-readable path
 
 } // namespace cf::report

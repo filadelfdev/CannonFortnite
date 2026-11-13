@@ -90,13 +90,24 @@ void FireCannonWeaponAt(const LocalPlayerCache& lp,
     int ammo = 9999;
     cf::proc::Write(weapon + cf::off::Weapon_AmmoCount, &ammo, sizeof(int));
 
-    // 4. RPC path (if resolved) sends the real ServerFire; otherwise
-    //    the direct writes above are the "fire" signal.
-    // TODO: direct UFunction call via engine reflection once sigs are
-    // resolved (Phase 2 RE). The writes above (cooldown zero + ammo
-    // top-up + aim write) are the cheat-side signal; a real ServerFire
-    // RPC invocation on the current weapon's UFunction table lives in
-    // this slot and will land here once resolved.
+    // 4. RPC path — invoke the weapon's ServerFire UFunction with the
+    //    computed fire rotation. ProcessEvent handles the client-side
+    //    FName → UFunction lookup and dispatches through the engine's
+    //    normal replication path, so the server-side cooldown + ammo
+    //    checks go through the same code path a real trigger pull
+    //    would, keeping the on-wire stream identical to a human fire.
+    //
+    //    The params layout matches AFortWeapon::ServerFire's property
+    //    chain (FRotator FireRotation, FVector FireStart). If the
+    //    UFunction lookup fails, CallUFunction returns false silently
+    //    and the direct writes above remain the effective fire signal.
+    struct FireParams {
+        FRotator fireRotation;
+        FVector  fireStart;
+    } params;
+    params.fireRotation = aim;
+    params.fireStart    = shootOrigin;
+    cf::sdk::CallUFunction(weapon, "ServerFire", &params);
 }
 
 // Find the densest chest cluster in range AROUND THE PLAYER. The

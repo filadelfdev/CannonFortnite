@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 #include <vector>
 #include <atomic>
@@ -22,8 +23,9 @@ struct AimCfg {
     std::atomic<bool>  noRecoil{true};
     std::atomic<bool>  noSpread{true};
 };
-extern AimCfg g_aimCfg;
+CF_FEAT_API extern AimCfg g_aimCfg;
 
-void TickAim(const LocalPlayerCache& lp, const std::vector<Actor>& actors, float dt);
+CF_FEAT_API void TickAim(const LocalPlayerCache& lp,
+                         const std::vector<Actor>& actors, float dt);
 
 } // namespace cf::feat

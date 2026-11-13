@@ -1,3 +1,19 @@
+// overlay.cpp — Present hook + ImGui on the game's own swapchain.
+//
+// Boot:
+//   1. Spawn a sacrificial swapchain on a 1×1 scratch HWND.
+//   2. Read its IDXGISwapChain vtable (shared across every
+//      IDXGISwapChain instance in the process, dxgi.dll-wide).
+//   3. Patch slot 8 (Present) and slot 13 (ResizeBuffers) to our
+//      hook thunks via VirtualProtect + pointer swap.
+//   4. Release the sacrifice; wait on quit.
+//
+// The first real Present through the hook latches the game's device,
+// context, output window, and installs ImGui's win32 + dx11 backends.
+// Input is caught via SetWindowLongPtrW on the captured HWND; the
+// hotkey poll + rebind loop runs once per Present (render thread),
+// not on a separate input thread.
+
 #include "overlay/overlay.h"
 #include "overlay/theme.h"
 #include "overlay/cfg_persist.h"
@@ -9,10 +25,6 @@
 #include "features/aimbot.h"
 #include "core/process.h"
 
-
-
-
-
 #include "util/report.h"
 #include <fstream>
 #include <ctime>
@@ -23,9 +35,11 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include <chrono>
+#include <thread>
 #include <cstdio>
 
 #if __has_include(<imgui.h>)
@@ -52,13 +66,25 @@ OverlayCfg g_ovCfg{};
 
 namespace {
 
-HWND                g_hwnd{};
-ID3D11Device*       g_dev{};
-ID3D11DeviceContext*g_ctx{};
-IDXGISwapChain*     g_swap{};
+// --- hook state ---------------------------------------------------
+using PresentFn       = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+using ResizeBuffersFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+
+PresentFn       g_origPresent{};
+ResizeBuffersFn g_origResizeBuffers{};
+WNDPROC         g_origWndProc{};
+void**          g_vtbl{};      // cached swapchain vtable pointer
+
+ID3D11Device*           g_dev{};
+ID3D11DeviceContext*    g_ctx{};
 ID3D11RenderTargetView* g_rtv{};
-UINT                g_w=1920, g_h=1080;
+HWND                    g_hwnd{};
+UINT                    g_w = 1920, g_h = 1080;
+
+std::atomic<bool>   g_initialised{false};
 std::atomic<bool>   g_quit{false};
+TickFn              g_perFrame;
+std::chrono::steady_clock::time_point g_lastFrame;
 
 std::mutex              g_dlLock;
 std::vector<cf::feat::DrawItem> g_dl;
@@ -66,90 +92,20 @@ std::vector<cf::feat::DrawItem> g_dl;
 enum class Tab { Route, Loot, Aim, Mats, Cannon, Speed, Esp, Report, Security, About };
 Tab g_tab = Tab::Route;
 
-// Top-left HUD toggle — the "Chests Searched: N" counter mirroring the
-// in-game string the reference compilation shows (frame 20: "Chests
-// Searched: 21"). Matches the server-side counter the game itself
-// maintains when ServerInteract fires.
+// Top-left HUD toggle.
 std::atomic<bool> g_showHud{true};
 
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp){
-#if CF_HAS_IMGUI
-    if(ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return true;
-#endif
-    switch(msg){
-        case WM_SIZE:
-            if(g_dev && wp != SIZE_MINIMIZED){
-                if(g_rtv){ g_rtv->Release(); g_rtv=nullptr; }
-                g_swap->ResizeBuffers(0, (UINT)LOWORD(lp), (UINT)HIWORD(lp), DXGI_FORMAT_UNKNOWN, 0);
-                ID3D11Texture2D* bb=nullptr;
-                g_swap->GetBuffer(0, IID_PPV_ARGS(&bb));
-                if(bb){ g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv); bb->Release(); }
-                g_w = LOWORD(lp); g_h = HIWORD(lp);
-            }
-            return 0;
-        case WM_DESTROY: g_quit = true; PostQuitMessage(0); return 0;
-    }
-    return DefWindowProcW(hwnd, msg, wp, lp);
-}
-
-bool CreateDevice(){
-    DXGI_SWAP_CHAIN_DESC sc{};
-    sc.BufferCount=2;
-    sc.BufferDesc.Format=DXGI_FORMAT_R8G8B8A8_UNORM;
-    sc.BufferUsage=DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sc.OutputWindow=g_hwnd;
-    sc.SampleDesc.Count=1;
-    sc.Windowed=TRUE;
-    sc.SwapEffect=DXGI_SWAP_EFFECT_FLIP_DISCARD;
-
-    D3D_FEATURE_LEVEL fl;
-    HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
-                                                0, nullptr, 0, D3D11_SDK_VERSION,
-                                                &sc, &g_swap, &g_dev, &fl, &g_ctx);
-    if(FAILED(hr)) return false;
-    ID3D11Texture2D* bb=nullptr;
-    g_swap->GetBuffer(0, IID_PPV_ARGS(&bb));
-    g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv);
-    bb->Release();
-    return true;
-}
-
-bool CreateWindow_(){
-    WNDCLASSEXW wc{sizeof(wc)};
-    wc.style         = CS_HREDRAW|CS_VREDRAW;
-    wc.lpfnWndProc   = WndProc;
-    wc.hInstance     = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"tooltips_class32";
-    RegisterClassExW(&wc);
-
-    RECT r{0,0,(LONG)GetSystemMetrics(SM_CXSCREEN),(LONG)GetSystemMetrics(SM_CYSCREEN)};
-    g_w = r.right; g_h = r.bottom;
-
-    g_hwnd = CreateWindowExW(
-        WS_EX_LAYERED | WS_EX_NOACTIVATE,
-        wc.lpszClassName, L"", WS_POPUP,
-        r.left, r.top, g_w, g_h,
-        nullptr, nullptr, wc.hInstance, nullptr);
-
-    SetLayeredWindowAttributes(g_hwnd, 0, 0, LWA_COLORKEY);
-    MARGINS m{-1,-1,-1,-1};
-    extern "C" HRESULT WINAPI DwmExtendFrameIntoClientArea(HWND, const MARGINS*);
-    DwmExtendFrameIntoClientArea(g_hwnd, &m);
-    ShowWindow(g_hwnd, SW_SHOW);
-    UpdateWindow(g_hwnd);
-    // Late-flip TOPMOST + exclude from capture so the WM_CREATE snapshot
-    // of our flags looks benign.
-    SetWindowPos(g_hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    return true;
-}
+// Forward decls — PageSecurity calls VkName; VkName's definition sits
+// below the pages. The hotkey poll in the Present hook needs both.
+const char* VkName(int vk);
+bool        TogglePress(int vk, bool& edge);
+int         CaptureNextKey();
 
 #if CF_HAS_IMGUI
 // ---- small widgets ---------------------------------------------------
 
 ImU32 X(unsigned argb){ return (ImU32)argb; }
 
-// A pill with a dot + text. Three variants: ok / warn / off.
 void StatusPill(const char* label, bool ok){
     using namespace cf::ov::theme::col;
     ImU32 dot = ok ? X(::cf::ov::theme::col::ok) : X(textDim);
@@ -164,7 +120,6 @@ void StatusPill(const char* label, bool ok){
     ImGui::Dummy(ImVec2(w, h));
 }
 
-// Toggle switch — slimmer than a checkbox, cyan when on.
 bool Toggle(const char* id, bool* v){
     using namespace cf::ov::theme::col;
     ImVec2 p  = ImGui::GetCursorScreenPos();
@@ -181,7 +136,6 @@ bool Toggle(const char* id, bool* v){
     return clicked;
 }
 
-// A labelled row: label on the left, control on the right.
 void RowBegin(const char* label){
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextUnformatted(label);
@@ -216,7 +170,6 @@ bool RowSliderI(const char* label, std::atomic<int>& v, int lo, int hi){
     return changed;
 }
 
-// Sidebar tab button.
 bool TabButton(const char* label, Tab self){
     using namespace cf::ov::theme::col;
     bool active = (g_tab == self);
@@ -230,7 +183,6 @@ bool TabButton(const char* label, Tab self){
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(4);
     if(clicked) g_tab = self;
-    // Accent bar on the left when active.
     if(active){
         ImVec2 p = ImGui::GetItemRectMin();
         ImVec2 q = ImGui::GetItemRectMax();
@@ -271,19 +223,15 @@ void PageLoot(){
     RowToggle ("enabled",       cf::feat::g_lootCfg.enabled);
     RowToggle ("chest magnet",  cf::feat::g_lootCfg.chestMagnet);
     RowToggle ("pickup magnet", cf::feat::g_lootCfg.pickupMagnet);
-    // "ignore walls" / "prefer mythic" UI removed — flags were dead.
-    // Re-enable here once LOS trace + tier sort land.
     RowToggle ("instant pickup",cf::feat::g_lootCfg.instantPickup);
     RowSliderF("radius",        cf::feat::g_lootCfg.magnetRadius_m, 10.f, 200.f, "%.0f m");
     RowSliderF("pull speed",    cf::feat::g_lootCfg.magnetSpeed_cm, 100.f, 2000.f, "%.0f cm");
     RowSliderI("pulls / tick",  cf::feat::g_lootCfg.maxPullsPerTick, 1, 16);
-    // "prefer mythic" row removed — dead UI (no tier sort yet).
 }
 
 void PageAim(){
     RowToggle ("enabled",      cf::feat::g_aimCfg.enabled);
     RowToggle ("silent aim",   cf::feat::g_aimCfg.silent);
-    // "visible only" row removed — dead UI (no LOS trace yet).
     RowToggle ("team check",   cf::feat::g_aimCfg.teamCheck);
     RowToggle ("velocity lead",cf::feat::g_aimCfg.predictVelocity);
     RowSliderF("fov",          cf::feat::g_aimCfg.fov_deg,       1.f, 60.f,  "%.1f deg");
@@ -369,17 +317,15 @@ void PageEsp(){
 void PageSecurity(){
     using namespace cf::ov::theme::col;
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("kernel path and ac heartbeat run on their own workers. toggles here only soften; the panic key (END) still hard-exits.");
+    ImGui::TextWrapped("in-process model — swapchain hook captured at first Present. "
+                       "the panic key (Caps Lock) still hard-exits.");
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0, 4));
 
-    StatusPill(true  ? "kernel ON" : "kernel OFF", true);
-    ImGui::SameLine();
-    // Internal-model pills — reflect what actually applies when the
-    // cheat runs in-process. The external-only pills (rpc, env-lie,
-    // dxgi cloak) were removed with the architecture change.
     bool enginesOk = cf::sdk::ResolveGlobals();
     StatusPill(enginesOk ? "engine ON"  : "engine OFF (offsets stale)", enginesOk);
+    ImGui::SameLine();
+    StatusPill(g_initialised.load() ? "render-hook OK" : "render-hook idle", g_initialised.load());
     ImGui::SameLine();
     StatusPill("in-process", true);
     ImGui::Dummy(ImVec2(0, 6));
@@ -391,8 +337,6 @@ void PageSecurity(){
 
     ImGui::Dummy(ImVec2(0, 8));
 
-    // HWID state — read the marker written by the standalone spoofer.
-    // The cheat never touches HWID itself anymore.
     int slot = -1; double ageH = -1;
     {
         wchar_t p[MAX_PATH]{}; SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0, p);
@@ -501,7 +445,6 @@ void PageReport(){
 
     ImGui::Dummy(ImVec2(0, 10));
 
-    // XP + token projection (BP sem cap — mini-season Treasure Hunters).
     if(s.avgRatePerSec > 0.0){
         double xpPerHour     = s.avgRatePerSec * 3600.0 * 600.0;
         double levelsPerHour = xpPerHour / 80000.0;
@@ -535,13 +478,13 @@ void PageAbout(){
     ImGui::PushStyleColor(ImGuiCol_Text, X(textDim));
     ImGui::TextUnformatted("pirate token farm · v6");
     ImGui::Dummy(ImVec2(0, 10));
-    ImGui::TextUnformatted("hotkeys");
+    ImGui::TextUnformatted("hotkeys (rebind on security page)");
     ImGui::PopStyleColor();
-    ImGui::BulletText("INSERT   toggle menu");
-    ImGui::BulletText("F9       speed");
-    ImGui::BulletText("F10      cannon");
-    ImGui::BulletText("F11      esp");
-    ImGui::BulletText("END      panic exit");
+    ImGui::BulletText("Right Alt   toggle menu");
+    ImGui::BulletText("Caps Lock   panic exit");
+    ImGui::BulletText("Mouse4      cannon");
+    ImGui::BulletText("Mouse5      speed");
+    ImGui::BulletText("Right Ctrl  esp");
     ImGui::Dummy(ImVec2(0, 10));
     ImGui::PushStyleColor(ImGuiCol_Text, X(textDim));
     ImGui::TextUnformatted("built by olivia");
@@ -551,15 +494,12 @@ void PageAbout(){
 
 // ---- esp marks -------------------------------------------------------
 
-// A single-pass mark: two L brackets + dot + distance chip. Reads as one
-// system with the panel's accent colour, costs less than a filled box.
 void DrawEspMark(ImDrawList* dl, const cf::feat::DrawItem& it, float screenW){
     using namespace cf::ov::theme::col;
     ImU32 c  = (ImU32)it.color;
     ImU32 ct = (c & 0x60FFFFFF);
     float x = it.x, y = it.y;
     float a = 8.f, b = 2.f;
-    // corner brackets
     dl->AddLine(ImVec2(x-a, y-a), ImVec2(x-a+b*2, y-a), c, 1.4f);
     dl->AddLine(ImVec2(x-a, y-a), ImVec2(x-a, y-a+b*2), c, 1.4f);
     dl->AddLine(ImVec2(x+a, y-a), ImVec2(x+a-b*2, y-a), c, 1.4f);
@@ -576,19 +516,13 @@ void DrawEspMark(ImDrawList* dl, const cf::feat::DrawItem& it, float screenW){
     }
 }
 
-#endif
-
-void DrawFrame(){
-    float clear[4]{0,0,0,0};
-    g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
-    g_ctx->ClearRenderTargetView(g_rtv, clear);
-
-#if CF_HAS_IMGUI
+// ---- per-Present ImGui frame (no Present call — the hook chains it) --
+void BuildFrame(){
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
 
-    // ---- ESP (background draw list, no input cost) ----
+    // ESP overlay.
     {
         auto* bgdl = ImGui::GetBackgroundDrawList();
         std::vector<cf::feat::DrawItem> items;
@@ -596,24 +530,16 @@ void DrawFrame(){
         for(auto& it : items) DrawEspMark(bgdl, it, (float)g_w);
     }
 
-    // ---- Top-left HUD — HZ AIM branded, three-line compact readout ----
-    //   line 1: HZ AIM  <base hex>            (brand, gold)
-    //   line 2: Chests Opened: N | [RAM: ...]  (status, green/red)
-    //   line 3: +XP earned                     (accent gold)
+    // Top-left HUD.
     if(g_showHud.load()){
         auto* bgdl = ImGui::GetBackgroundDrawList();
         auto sum = cf::report::Current();
 
-        bool ramLive = true;
-        bool kernel  = true;
-
         char l1[96], l2[96], l3[64];
         std::snprintf(l1, 96, "HZ AIM  %016llx",
                       (unsigned long long)cf::proc::Base());
-        std::snprintf(l2, 96, "Chests Opened: %u  |  [RAM: %s%s]",
-                      sum.totalChests(),
-                      ramLive ? "ACTIVE" : "IDLE",
-                      kernel  ? "+K"      : "");
+        std::snprintf(l2, 96, "Chests Opened: %u  |  [RAM: ACTIVE]",
+                      sum.totalChests());
         std::snprintf(l3, 64, "+%u XP", sum.totalXp());
 
         ImVec2 s1 = ImGui::CalcTextSize(l1);
@@ -622,19 +548,17 @@ void DrawFrame(){
         float w = std::max(std::max(s1.x, s2.x), s3.x) + 22;
         float h = s1.y + s2.y + s3.y + 20;
 
-        // Deep red backdrop with a faint gold top-edge line.
         bgdl->AddRectFilled(ImVec2(0, 0), ImVec2(w, h),
                             IM_COL32(170, 25, 25, 230), 0);
         bgdl->AddRectFilled(ImVec2(0, h-2), ImVec2(w, h),
                             IM_COL32(232, 185, 56, 255), 0);
 
-        bgdl->AddText(ImVec2(10, 4),                       IM_COL32(255, 255, 255, 255), l1);
-        ImU32 ramCol = ramLive ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 80, 80, 255);
-        bgdl->AddText(ImVec2(10, 4 + s1.y + 2),            ramCol,         l2);
-        bgdl->AddText(ImVec2(10, 4 + s1.y + s2.y + 4),     IM_COL32(232, 185, 56, 255), l3);
+        bgdl->AddText(ImVec2(10, 4),                   IM_COL32(255, 255, 255, 255), l1);
+        bgdl->AddText(ImVec2(10, 4 + s1.y + 2),        IM_COL32(120, 255, 120, 255), l2);
+        bgdl->AddText(ImVec2(10, 4 + s1.y + s2.y + 4), IM_COL32(232, 185, 56, 255), l3);
     }
 
-    // ---- menu ----
+    // Menu.
     if(g_ovCfg.showMenu.load()){
         using namespace cf::ov::theme::col;
         ImGui::SetNextWindowSize(ImVec2(620, 520), ImGuiCond_FirstUseEver);
@@ -643,15 +567,13 @@ void DrawFrame(){
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_NoCollapse);
 
-        // ---- Title strip (72px) — HZ AIM logo + live counters ----
         ImVec2 wp = ImGui::GetWindowPos();
         ImVec2 ws = ImGui::GetWindowSize();
         auto* wdl = ImGui::GetWindowDrawList();
 
-        constexpr float TITLE_H = 72.f;
+        constexpr float TITLE_H  = 72.f;
         constexpr float STATUS_H = 30.f;
 
-        // Dark header background with subtle gold bottom border.
         wdl->AddRectFilled(ImVec2(wp.x, wp.y),
                            ImVec2(wp.x + ws.x, wp.y + TITLE_H),
                            X(bg2), 10.f, ImDrawFlags_RoundCornersTop);
@@ -659,10 +581,8 @@ void DrawFrame(){
                            ImVec2(wp.x + ws.x, wp.y + TITLE_H),
                            X(gold), 0);
 
-        // Logo badge — crossed-pistols-ish mark drawn with vector lines.
         float cx = wp.x + 30;
         float cy = wp.y + TITLE_H*0.5f;
-        // Hexagon outline
         ImVec2 hex[6]; float rad = 18.f;
         for(int i=0;i<6;++i){
             float a = (i/6.f) * 6.2831853f - 1.5707963f;
@@ -670,16 +590,13 @@ void DrawFrame(){
         }
         wdl->AddConvexPolyFilled(hex, 6, X(surf));
         wdl->AddPolyline(hex, 6, X(gold), ImDrawFlags_Closed, 2.f);
-        // Inside: HZ monogram (two angled strokes forming an H + Z feel)
         wdl->AddLine(ImVec2(cx-7, cy-7), ImVec2(cx-7, cy+7), X(gold), 2.f);
         wdl->AddLine(ImVec2(cx+7, cy-7), ImVec2(cx+7, cy+7), X(gold), 2.f);
         wdl->AddLine(ImVec2(cx-7, cy),   ImVec2(cx+7, cy),   X(gold), 2.f);
 
-        // Wordmark
         wdl->AddText(ImVec2(wp.x + 62, wp.y + 14), X(text),    "HZ AIM");
         wdl->AddText(ImVec2(wp.x + 62, wp.y + 36), X(textDim), "pirate token farm");
 
-        // Right-side: live counter + rate + XP (gold accent on numbers)
         static double   t0 = 0.0;
         static uint32_t last = 0;
         static float    rate = 0.f;
@@ -698,7 +615,6 @@ void DrawFrame(){
         wdl->AddText(ImVec2(wp.x + ws.x - c1.x - 16, wp.y + 14), X(gold),    cntLine1);
         wdl->AddText(ImVec2(wp.x + ws.x - c2.x - 16, wp.y + 36), X(textDim), cntLine2);
 
-        // ---- Status strip (30px) — compact pill row ----
         float sy = wp.y + TITLE_H + 2;
         wdl->AddRectFilled(ImVec2(wp.x, sy), ImVec2(wp.x + ws.x, sy + STATUS_H),
                            X(bg), 0);
@@ -710,14 +626,13 @@ void DrawFrame(){
         };
         float px = wp.x + 18;
         auto advance = [&](const char* lbl){ return ImGui::CalcTextSize(lbl).x + 26; };
-        dot(px, true,  "kernel");    px += advance("kernel");
+        dot(px, g_initialised.load(), "render-hook"); px += advance("render-hook");
         bool engineOk = cf::sdk::ResolveGlobals();
-        dot(px, engineOk, "engine"); px += advance("engine");
+        dot(px, engineOk, "engine");  px += advance("engine");
         dot(px, true,     "in-proc"); px += advance("in-proc");
 
         ImGui::Dummy(ImVec2(0, TITLE_H + STATUS_H - 10));
 
-        // Sidebar + content split
         ImGui::BeginChild("##sidebar", ImVec2(140, 0), false);
           ImGui::Dummy(ImVec2(0, 4));
           TabButton("cannon",   Tab::Cannon);
@@ -751,10 +666,12 @@ void DrawFrame(){
     }
 
     ImGui::Render();
+    g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-#endif
-    g_swap->Present(1, 0);
 }
+#endif  // CF_HAS_IMGUI
+
+// ---- input-side helpers (used by hook thread per Present) ------------
 
 bool TogglePress(int vk, bool& edge){
     bool now = (GetAsyncKeyState(vk) & 0x8000) != 0;
@@ -763,9 +680,6 @@ bool TogglePress(int vk, bool& edge){
     return rose;
 }
 
-// Scan every possible VK; if a rebind is pending, capture the first
-// keydown and assign it to the matching slot. Modifier-only keys and
-// the left mouse button are excluded so a click doesn't rebind.
 int CaptureNextKey(){
     for(int vk = 0x01; vk <= 0xFE; ++vk){
         if(vk == VK_LBUTTON) continue;
@@ -810,20 +724,63 @@ const char* VkName(int vk){
     return buf;
 }
 
-} // namespace
-
-void PublishDrawList(std::vector<cf::feat::DrawItem> items){
-    std::scoped_lock _(g_dlLock);
-    g_dl = std::move(items);
+void PollHotkeys(){
+    static bool em=false, es=false, ec=false, ep=false, eesp=false;
+    int rebind = g_ovCfg.rebindTarget.load();
+    if(rebind != 0){
+        int k = CaptureNextKey();
+        if(k != 0 && k != VK_LBUTTON){
+            switch(rebind){
+                case 1: g_ovCfg.menuKey.store(k); break;
+                case 2: g_ovCfg.panicKey.store(k); break;
+                case 3: g_ovCfg.toggleCannonKey.store(k); break;
+                case 4: g_ovCfg.toggleSpeedKey.store(k); break;
+                case 5: g_ovCfg.toggleEspKey.store(k); break;
+            }
+            g_ovCfg.rebindTarget.store(0);
+            em = es = ec = ep = eesp = true;
+            cf::ov::persist::SaveHotkeys(g_ovCfg);
+        }
+        return;
+    }
+    if(TogglePress(g_ovCfg.menuKey.load(),  em)) g_ovCfg.showMenu.store(!g_ovCfg.showMenu.load());
+    if(TogglePress(g_ovCfg.panicKey.load(), ep)) g_quit=true;
+    if(TogglePress(g_ovCfg.toggleCannonKey.load(), ec))
+        cf::feat::g_cfg.enabled.store(!cf::feat::g_cfg.enabled.load());
+    if(TogglePress(g_ovCfg.toggleSpeedKey.load(),  es))
+        cf::feat::g_speedCfg.enabled.store(!cf::feat::g_speedCfg.enabled.load());
+    if(TogglePress(g_ovCfg.toggleEspKey.load(),    eesp))
+        cf::feat::g_espCfg.enabled.store(!cf::feat::g_espCfg.enabled.load());
 }
 
-int Run(TickFn perFrame){
-    // Load persisted hotkeys before the window exists so the first
-    // input tick sees the user's bindings, not the defaults.
-    cf::ov::persist::LoadHotkeys(g_ovCfg);
+// ---- WndProc replacement on the game's window -----------------------
+LRESULT CALLBACK HookedWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp){
+#if CF_HAS_IMGUI
+    // When the menu is up, let ImGui swallow the input so clicks hit
+    // widgets instead of the game. When down, pass everything through
+    // so gameplay is unaffected — only the ESP overlay draws.
+    if(g_initialised.load() && g_ovCfg.showMenu.load()){
+        if(ImGui_ImplWin32_WndProcHandler(h, msg, wp, lp)) return 1;
+    }
+#endif
+    return CallWindowProcW(g_origWndProc, h, msg, wp, lp);
+}
 
-    if(!CreateWindow_())   return -1;
-    if(!CreateDevice())    return -2;
+// ---- first-Present initialisation -----------------------------------
+void InitBackends(IDXGISwapChain* sc){
+    if(g_initialised.load()) return;
+    if(FAILED(sc->GetDevice(__uuidof(ID3D11Device), (void**)&g_dev))) return;
+    g_dev->GetImmediateContext(&g_ctx);
+
+    DXGI_SWAP_CHAIN_DESC desc{};
+    sc->GetDesc(&desc);
+    g_hwnd = desc.OutputWindow;
+    g_w    = desc.BufferDesc.Width  ? desc.BufferDesc.Width  : g_w;
+    g_h    = desc.BufferDesc.Height ? desc.BufferDesc.Height : g_h;
+
+    ID3D11Texture2D* bb{};
+    sc->GetBuffer(0, IID_PPV_ARGS(&bb));
+    if(bb){ g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv); bb->Release(); }
 
 #if CF_HAS_IMGUI
     IMGUI_CHECKVERSION();
@@ -833,70 +790,173 @@ int Run(TickFn perFrame){
     ImGui_ImplDX11_Init(g_dev, g_ctx);
 #endif
 
-    bool em=false, es=false, ec=false, ep=false, eesp=false;
-    auto last = std::chrono::steady_clock::now();
+    // Steal the window proc so ImGui gets its input stream. Original is
+    // saved for the pass-through in HookedWndProc.
+    g_origWndProc = (WNDPROC)SetWindowLongPtrW(
+        g_hwnd, GWLP_WNDPROC, (LONG_PTR)HookedWndProc);
 
-    MSG msg{};
-    while(!g_quit){
-        while(PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)){
-            TranslateMessage(&msg); DispatchMessageW(&msg);
-            if(msg.message==WM_QUIT) g_quit=true;
-        }
-        // Rebind listen path — overrides normal hotkey handling while
-        // the user is choosing a key. First key down after the "rebind"
-        // button is captured, stored, and the target field cleared.
-        int rebind = g_ovCfg.rebindTarget.load();
-        if(rebind != 0){
-            int k = CaptureNextKey();
-            if(k != 0 && k != VK_LBUTTON){
-                switch(rebind){
-                    case 1: g_ovCfg.menuKey.store(k); break;
-                    case 2: g_ovCfg.panicKey.store(k); break;
-                    case 3: g_ovCfg.toggleCannonKey.store(k); break;
-                    case 4: g_ovCfg.toggleSpeedKey.store(k); break;
-                    case 5: g_ovCfg.toggleEspKey.store(k); break;
-                }
-                g_ovCfg.rebindTarget.store(0);
-                // Flush edges so the just-pressed key doesn't instantly
-                // toggle the thing it was bound to.
-                em = es = ec = ep = eesp = true;
-                // Persist immediately so a crash doesn't lose the bind.
-                cf::ov::persist::SaveHotkeys(g_ovCfg);
-            }
-        } else {
-            if(TogglePress(g_ovCfg.menuKey.load(),  em)) g_ovCfg.showMenu.store(!g_ovCfg.showMenu.load());
-            if(TogglePress(g_ovCfg.panicKey.load(), ep)) g_quit=true;
-            if(TogglePress(g_ovCfg.toggleCannonKey.load(), ec))
-                cf::feat::g_cfg.enabled.store(!cf::feat::g_cfg.enabled.load());
-            if(TogglePress(g_ovCfg.toggleSpeedKey.load(),  es))
-                cf::feat::g_speedCfg.enabled.store(!cf::feat::g_speedCfg.enabled.load());
-            if(TogglePress(g_ovCfg.toggleEspKey.load(),    eesp))
-                cf::feat::g_espCfg.enabled.store(!cf::feat::g_espCfg.enabled.load());
-        }
+    g_lastFrame = std::chrono::steady_clock::now();
+    g_initialised.store(true);
+    CF_INFO("overlay :: captured swapchain (hwnd=%p, %ux%u)", g_hwnd, g_w, g_h);
+}
 
+// ---- hook thunks -----------------------------------------------------
+HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* sc, UINT sync, UINT flags){
+    InitBackends(sc);
+
+    if(g_initialised.load()){
+        // Run the feature-pipeline tick + ImGui frame once per Present,
+        // on the game's render thread.
         auto now = std::chrono::steady_clock::now();
-        float dt = std::chrono::duration<float>(now - last).count();
-        last = now;
+        float dt = std::chrono::duration<float>(now - g_lastFrame).count();
+        g_lastFrame = now;
 
-        if(perFrame) perFrame(dt, (float)g_w, (float)g_h);
-        DrawFrame();
+        PollHotkeys();
+
+        if(g_perFrame) g_perFrame(dt, (float)g_w, (float)g_h);
+
+#if CF_HAS_IMGUI
+        if(g_rtv) BuildFrame();
+#endif
+    }
+    return g_origPresent(sc, sync, flags);
+}
+
+HRESULT STDMETHODCALLTYPE HookedResizeBuffers(IDXGISwapChain* sc, UINT count,
+                                              UINT width, UINT height,
+                                              DXGI_FORMAT format, UINT flags){
+    if(g_rtv){ g_rtv->Release(); g_rtv=nullptr; }
+    HRESULT hr = g_origResizeBuffers(sc, count, width, height, format, flags);
+    if(SUCCEEDED(hr) && g_dev){
+        ID3D11Texture2D* bb{};
+        sc->GetBuffer(0, IID_PPV_ARGS(&bb));
+        if(bb){ g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv); bb->Release(); }
+        if(width)  g_w = width;
+        if(height) g_h = height;
+    }
+    return hr;
+}
+
+// ---- vtable patch helpers -------------------------------------------
+bool PatchVTable(void** vtbl, int slot, void* newFn, void** outOld){
+    DWORD old;
+    if(!VirtualProtect(&vtbl[slot], sizeof(void*), PAGE_READWRITE, &old)) return false;
+    *outOld = vtbl[slot];
+    vtbl[slot] = newFn;
+    DWORD dummy;
+    VirtualProtect(&vtbl[slot], sizeof(void*), old, &dummy);
+    return true;
+}
+
+bool WriteVTable(void** vtbl, int slot, void* fn){
+    DWORD old;
+    if(!VirtualProtect(&vtbl[slot], sizeof(void*), PAGE_READWRITE, &old)) return false;
+    vtbl[slot] = fn;
+    DWORD dummy;
+    VirtualProtect(&vtbl[slot], sizeof(void*), old, &dummy);
+    return true;
+}
+
+// Spawn a 1×1 sacrificial swapchain, snapshot its vtable, patch slots
+// 8 (Present) and 13 (ResizeBuffers) in-place.
+bool InstallSwapchainHook(){
+    WNDCLASSEXW wc{sizeof(wc)};
+    wc.lpfnWndProc   = DefWindowProcW;
+    wc.hInstance     = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"cf_sac";
+    RegisterClassExW(&wc);
+    HWND tmp = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 1, 1,
+                               nullptr, nullptr, wc.hInstance, nullptr);
+    if(!tmp){
+        UnregisterClassW(wc.lpszClassName, wc.hInstance);
+        return false;
     }
 
-    // Save-on-exit covers the case where the user never crashed but
-    // the inline save after rebind was somehow skipped (defaults write
-    // on first run with no file).
+    DXGI_SWAP_CHAIN_DESC sc{};
+    sc.BufferCount    = 1;
+    sc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sc.BufferUsage    = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sc.OutputWindow   = tmp;
+    sc.SampleDesc.Count = 1;
+    sc.Windowed       = TRUE;
+    sc.SwapEffect     = DXGI_SWAP_EFFECT_DISCARD;
+
+    ID3D11Device*        dev{};
+    ID3D11DeviceContext* ctx{};
+    IDXGISwapChain*      swap{};
+    D3D_FEATURE_LEVEL    fl;
+
+    HRESULT hr = D3D11CreateDeviceAndSwapChain(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &sc, &swap, &dev, &fl, &ctx);
+    bool ok = false;
+    if(SUCCEEDED(hr) && swap){
+        g_vtbl = *reinterpret_cast<void***>(swap);
+        ok = true;
+        ok &= PatchVTable(g_vtbl,  8, (void*)HookedPresent,       (void**)&g_origPresent);
+        ok &= PatchVTable(g_vtbl, 13, (void*)HookedResizeBuffers, (void**)&g_origResizeBuffers);
+    }
+
+    if(swap) swap->Release();
+    if(ctx)  ctx->Release();
+    if(dev)  dev->Release();
+    DestroyWindow(tmp);
+    UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return ok;
+}
+
+void UninstallSwapchainHook(){
+    if(!g_vtbl) return;
+    if(g_origPresent)       WriteVTable(g_vtbl,  8, (void*)g_origPresent);
+    if(g_origResizeBuffers) WriteVTable(g_vtbl, 13, (void*)g_origResizeBuffers);
+    g_vtbl = nullptr;
+}
+
+} // namespace
+
+void PublishDrawList(std::vector<cf::feat::DrawItem> items){
+    std::scoped_lock _(g_dlLock);
+    g_dl = std::move(items);
+}
+
+int Run(TickFn perFrame){
+    cf::ov::persist::LoadHotkeys(g_ovCfg);
+    g_perFrame = std::move(perFrame);
+
+    if(!InstallSwapchainHook()){
+        CF_ERR("overlay :: swapchain hook install failed");
+        return -1;
+    }
+    CF_INFO("overlay :: swapchain vtable patched (Present slot 8, ResizeBuffers slot 13)");
+
+    // Idle until panic. The actual work runs inside HookedPresent on
+    // the game's render thread — this thread just owns the lifetime.
+    while(!g_quit.load()){
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // Best-effort unhook — if the game is shutting down the vtable
+    // walk may race with dxgi teardown. The DLL unload path also
+    // releases ImGui, so a race here is non-fatal.
+    UninstallSwapchainHook();
+
     cf::ov::persist::SaveHotkeys(g_ovCfg);
 
 #if CF_HAS_IMGUI
-    ImGui_ImplDX11_Shutdown();
-    ImGui_ImplWin32_Shutdown();
-    ImGui::DestroyContext();
+    if(g_initialised.load()){
+        ImGui_ImplDX11_Shutdown();
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+    }
 #endif
     if(g_rtv){ g_rtv->Release(); g_rtv=nullptr; }
-    if(g_swap){ g_swap->Release(); g_swap=nullptr; }
-    if(g_ctx){ g_ctx->Release(); g_ctx=nullptr; }
-    if(g_dev){ g_dev->Release(); g_dev=nullptr; }
-    if(g_hwnd){ DestroyWindow(g_hwnd); g_hwnd=nullptr; }
+    if(g_hwnd && g_origWndProc){
+        SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC, (LONG_PTR)g_origWndProc);
+        g_origWndProc = nullptr;
+    }
+    // g_dev / g_ctx are borrowed from the game — do NOT Release them.
+    g_dev = nullptr;
+    g_ctx = nullptr;
     return 0;
 }
 

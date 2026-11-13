@@ -15,9 +15,34 @@ struct Globals {
     uintptr_t gWorld{};
     uintptr_t gNames{};
     uintptr_t gObjects{};
+    // ProcessEvent dispatcher — the engine's universal function-call
+    // entry. Resolved by the vtable slot on the local player's UObject
+    // once (any UObject's vtable has the same ProcessEvent slot). The
+    // helper falls back to a pattern scan if the vtable read fails.
+    uintptr_t fnProcessEvent{};
     bool      resolved{};
     std::mutex lock;
 } g;
+
+// --- UFunction lookup cache ----------------------------------------
+//
+// Walking UClass->FuncMap every call would be O(buckets) per invoke;
+// instead each (uclass, funcName) pair is memoised. Keyed by uclass to
+// survive instance changes of the same class.
+struct FuncKey {
+    uintptr_t uclass;
+    uint64_t  namehash;
+    bool operator==(const FuncKey& o) const {
+        return uclass==o.uclass && namehash==o.namehash;
+    }
+};
+struct FuncKeyHash {
+    size_t operator()(const FuncKey& k) const noexcept {
+        return std::hash<uintptr_t>{}(k.uclass) ^ (k.namehash * 0x9E3779B97F4A7C15ull);
+    }
+};
+std::unordered_map<FuncKey, uintptr_t, FuncKeyHash> g_funcCache;
+std::mutex g_funcCacheLock;
 
 std::unordered_map<uint32_t, std::string> g_nameCache;
 std::unordered_map<uintptr_t, std::string> g_classCache;
@@ -69,6 +94,19 @@ bool ResolveGlobals(){
     g.gWorld   = base + cf::off::G_WORLD;
     g.gNames   = base + cf::off::G_NAMES;
     g.gObjects = base + cf::off::G_OBJECTS;
+
+    // ProcessEvent discovery. Two strategies, tried in order:
+    //   1. Read the vtable slot off any resolvable UObject (local
+    //      player's controller is the earliest stable one; done lazily
+    //      the first time CallUFunction is invoked, since world isn't
+    //      populated yet on the first ResolveGlobals call).
+    //   2. Pattern-scan the main module for the ProcessEvent prologue.
+    //      Signature covers the common UE5 build.
+    g.fnProcessEvent = cf::proc::Pattern(
+        "40 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ?? ?? ?? ?? 48 81 EC");
+    // fnProcessEvent may legitimately be 0 here — the lazy vtable
+    // read in CallUFunction will fill it on the first real call.
+
     g.resolved = true;
     return true;
 }
@@ -234,6 +272,79 @@ bool WorldToScreen(const LocalPlayerCache& lp,
     sx = (screenW*0.5f) + zy/(zx*tanH) * (screenW*0.5f);
     sy = (screenH*0.5f) - zz/(zx*tanH*(screenH/screenW)) * (screenH*0.5f);
     return sx>=0 && sx<=screenW && sy>=0 && sy<=screenH;
+}
+
+namespace {
+
+// Walk a UClass's Children list looking for a UFunction whose UObject
+// name matches namehash (lowercased fnv1a). Follows SuperStruct up the
+// inheritance chain so a function declared on APawn is reachable from
+// AFortPlayerPawnAthena. Returns the UFunction* or 0.
+uintptr_t FindUFunctionByHash(uintptr_t uclass, uint64_t namehash){
+    while(uclass){
+        uintptr_t child = cf::proc::R<uintptr_t>(uclass + cf::off::UStruct_Children);
+        while(child){
+            uint32_t nameIdx = cf::proc::R<uint32_t>(child + cf::off::UObject_NamePrivate);
+            std::string n = FNameToString(nameIdx);
+            if(!n.empty() && cf::ab::fnv1a_lower(n.c_str()) == namehash){
+                return child;
+            }
+            child = cf::proc::R<uintptr_t>(child + cf::off::UField_Next);
+        }
+        uclass = cf::proc::R<uintptr_t>(uclass + cf::off::UStruct_SuperStruct);
+    }
+    return 0;
+}
+
+// Resolve ProcessEvent lazily off an object's vtable the first time
+// we need it. The slot index is the dumped UObject_VTable_ProcessEvent
+// offset; falls back to the pattern-scan result if the slot read 0.
+uintptr_t ResolveProcessEvent(uintptr_t obj){
+    if(g.fnProcessEvent) return g.fnProcessEvent;
+    if(!obj) return 0;
+    uintptr_t vtbl = cf::proc::R<uintptr_t>(obj);
+    if(!vtbl) return 0;
+    uintptr_t fn = cf::proc::R<uintptr_t>(vtbl + cf::off::UObject_VTable_ProcessEvent);
+    if(fn){
+        std::scoped_lock _(g.lock);
+        g.fnProcessEvent = fn;
+    }
+    return fn;
+}
+
+} // namespace
+
+bool CallUFunction(uintptr_t object, const char* funcName, void* params){
+    if(!object || !funcName || !*funcName) return false;
+
+    const uint64_t h = cf::ab::fnv1a_lower(funcName);
+    uintptr_t uclass = cf::proc::R<uintptr_t>(object + cf::off::UObject_ClassPrivate);
+    if(!uclass) return false;
+
+    // 1. Resolve the UFunction* (cached per class+name).
+    uintptr_t ufunc = 0;
+    {
+        std::scoped_lock _(g_funcCacheLock);
+        auto it = g_funcCache.find(FuncKey{uclass, h});
+        if(it != g_funcCache.end()) ufunc = it->second;
+    }
+    if(!ufunc){
+        ufunc = FindUFunctionByHash(uclass, h);
+        std::scoped_lock _(g_funcCacheLock);
+        g_funcCache[FuncKey{uclass, h}] = ufunc;
+    }
+    if(!ufunc) return false;
+
+    // 2. Resolve ProcessEvent — vtable off the object we're calling on.
+    uintptr_t pe = ResolveProcessEvent(object);
+    if(!pe) return false;
+
+    // 3. Thunk: ProcessEvent is a non-static member — Microsoft x64 ABI
+    //    passes `this` in RCX, so a plain C call with (object, ufunc,
+    //    params) in RCX/RDX/R8 maps directly onto the member signature.
+    using PE = void (__fastcall*)(uintptr_t self, uintptr_t fn, void* p);
+    reinterpret_cast<PE>(pe)(object, ufunc, params);
+    return true;
 }
 
 } // namespace cf::sdk

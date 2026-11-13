@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 
 namespace cf::ab::clamp {
@@ -10,13 +11,13 @@ namespace cf::ab::clamp {
 // Teleport delta cap — Fortnite's anti-warp fires on cumulative deltas
 // above ~35m over a short window. 32m per tick with a 3-tick cooldown
 // stays under it.
-FVector teleport(const FVector& from, const FVector& to, float maxDelta_cm);
+CF_AB_API FVector teleport(const FVector& from, const FVector& to, float maxDelta_cm);
 
 // Speed caps — the server echoes a MaxWalkSpeed and will reject moves
 // above that. We stay at or just under the next quantization step.
-float speedCap(float desired, float serverCap);
+CF_AB_API float speedCap(float desired, float serverCap);
 
 // Open-rate limiter for chest search.
-bool chestOpenRateOk(double now, double lastOpen);
+CF_AB_API bool chestOpenRateOk(double now, double lastOpen);
 
 } // namespace cf::ab::clamp

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 #include <vector>
 #include <atomic>
@@ -18,7 +19,7 @@ struct EspCfg {
     std::atomic<int>   playerColor{0xFFE74C3C};
     std::atomic<int>   lootDropColor{0xFF2ECC71};
 };
-extern EspCfg g_espCfg;
+CF_FEAT_API extern EspCfg g_espCfg;
 
 struct DrawItem {
     float x, y;
@@ -27,8 +28,8 @@ struct DrawItem {
     char  label[32];
     bool  drawLineFromBottom;
 };
-std::vector<DrawItem> BuildDrawList(const LocalPlayerCache& lp,
-                                    const std::vector<Actor>& actors,
-                                    float screenW, float screenH);
+CF_FEAT_API std::vector<DrawItem> BuildDrawList(const LocalPlayerCache& lp,
+                                                const std::vector<Actor>& actors,
+                                                float screenW, float screenH);
 
 } // namespace cf::feat

@@ -1,4 +1,5 @@
 #pragma once
+#include "core/cf_api.h"
 #include "core/types.h"
 #include <atomic>
 #include <vector>
@@ -29,22 +30,22 @@ struct RouteCfg {
     std::atomic<bool>  rotateToTarget{true};
     std::atomic<bool>  preferUnopenedTier{true};
 };
-extern RouteCfg g_routeCfg;
+CF_FEAT_API extern RouteCfg g_routeCfg;
 
 // Plan: greedy nearest-neighbor over chests; returns actor addresses in
 // visit order. Cheap enough to run every ~6 ticks.
-void PlanRoute(const LocalPlayerCache& lp,
-               const std::vector<Actor>& actors,
-               std::vector<uintptr_t>& outOrder);
+CF_FEAT_API void PlanRoute(const LocalPlayerCache& lp,
+                           const std::vector<Actor>& actors,
+                           std::vector<uintptr_t>& outOrder);
 
 // One tick of the active route — advances the player, bulk-opens, picks
 // the next hop. Called from the main pipeline when mode != CannonArc.
-void TickRoute(const LocalPlayerCache& lp,
-               const std::vector<Actor>& actors,
-               float dt);
+CF_FEAT_API void TickRoute(const LocalPlayerCache& lp,
+                           const std::vector<Actor>& actors,
+                           float dt);
 
 // Count of chests the current session has opened (for the HUD).
-uint32_t Looted();
-void     ResetLooted();
+CF_FEAT_API uint32_t Looted();
+CF_FEAT_API void     ResetLooted();
 
 } // namespace cf::feat
